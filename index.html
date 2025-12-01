@@ -1,22 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Minecraft Favicon</title>
+
+<!-- Dark theme body -->
+<style>
+    body {
+        margin: 0;
+        background: #0d0d0d;
+        color: white;
+        font-family: Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        flex-direction: column;
+        text-align: center;
+    }
+    .arrow {
+        font-size: 80px;
+        margin-bottom: 10px;
+        color: #00ff00;
+        user-select: none;
+    }
+    .label {
+        font-size: 30px;
+        opacity: 0.8;
+    }
+</style>
+
 <link id="favicon" rel="icon" href="">
 <script>
-const canvas = document.createElement("canvas");
-canvas.width = 16;
-canvas.height = 16;
-const ctx = canvas.getContext("2d");
+// ----- Favicon Canvas -----
+const fav = document.createElement("canvas");
+fav.width = 32;
+fav.height = 32;
+const ctx = fav.getContext("2d");
 
-let angle = 0;
-function updateFavicon() {
-  ctx.fillStyle = "black";
-  ctx.fillRect(0, 0, 16, 16);
+// ----- World Setup -----
+const blocks = [];
+const WORLD_SIZE = 7;
 
-  ctx.fillStyle = "lime";
-  ctx.fillRect(5 + Math.sin(angle)*3, 5, 6, 6);
-
-  angle += 0.2;
-
-  document.querySelector("#favicon").href = canvas.toDataURL("image/png");
-  requestAnimationFrame(updateFavicon);
+// Simple random voxel terrain
+for (let x = 0; x < WORLD_SIZE; x++) {
+    for (let z = 0; z < WORLD_SIZE; z++) {
+        const height = Math.floor(Math.random()*3 + 2);
+        for (let y = 0; y < height; y++) {
+            blocks.push({x, y, z});
+        }
+    }
 }
-updateFavicon();
+
+// ----- Camera -----
+let camX = 3.5;
+let camY = 3;
+let camZ = 10;
+
+let yaw = 0;   // left-right rotation
+let pitch = 0; // up-down rotation
+
+// Movement keys
+const keys = {};
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
+
+// ----- Utility -----
+function isoProject(x, y, z) {
+    // Rotate around Y (yaw)
+    let rx = x * Math.cos(yaw) - z * Math.sin(yaw);
+    let rz = x * Math.sin(yaw) + z * Math.cos(yaw);
+
+    // Move world relative to camera
+    rx -= camX;
+    y  -= camY;
+    rz -= camZ;
+
+    // Very cheap projection
+    let px = rx * 4 + 16;
+    let py = y * -3 + rz * 2 + 16;
+
+    return [px, py];
+}
+
+// ----- Render -----
+function render() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0,0,32,32);
+
+    for (let b of blocks) {
+        const [px, py] = isoProject(b.x, b.y, b.z);
+        ctx.fillStyle = "#00ff00";  // green blocks
+        ctx.fillRect(px, py, 3, 3);
+    }
+
+    document.getElementById("favicon").href = fav.toDataURL();
+
+    requestAnimationFrame(render);
+}
+
+// ----- Controls -----
+function updateControls() {
+    const speed = 0.05;
+
+    // WASD movement
+    if (keys["w"]) {
+        camZ -= Math.cos(yaw) * speed;
+        camX -= Math.sin(yaw) * speed;
+    }
+    if (keys["s"]) {
+        camZ += Math.cos(yaw) * speed;
+        camX += Math.sin(yaw) * speed;
+    }
+    if (keys["a"]) {
+        camX -= Math.cos(yaw) * speed;
+        camZ += Math.sin(yaw) * speed;
+    }
+    if (keys["d"]) {
+        camX += Math.cos(yaw) * speed;
+        camZ -= Math.sin(yaw) * speed;
+    }
+
+    // Arrow key look
+    if (keys["ArrowLeft"])  yaw -= 0.03;
+    if (keys["ArrowRight"]) yaw += 0.03;
+    if (keys["ArrowUp"])    camY -= 0.05;
+    if (keys["ArrowDown"])  camY += 0.05;
+
+    requestAnimationFrame(updateControls);
+}
+
+// Start loops
+render();
+updateControls();
 </script>
+
+
+</head>
+<body>
+
+<div class="arrow">↑</div>
+<div class="label">minecraft (in favicon)</div>
+
+</body>
+</html>
