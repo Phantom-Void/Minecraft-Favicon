@@ -1,181 +1,54 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Voxel — Minecraft Camera</title>
-<style>
-    body {
-        background:#0b1118;
-        color:white;
-        text-align:center;
-        font-family:Arial, sans-serif;
-    }
-    canvas {
-        background:#000;
-        margin-top:20px;
-        border:4px solid #1e2a35;
-        border-radius:8px;
-    }
-</style>
-</head>
-<body>
-
-<h1>Voxel — Minecraft Camera (No Roll)</h1>
-<canvas id="game" width="640" height="480"></canvas>
-
-<p>WASD move • Mouse = look • Space = jump • LMB mine</p>
-
-<script>
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-canvas.requestPointerLock =
-    canvas.requestPointerLock ||
-    canvas.mozRequestPointerLock;
-
-canvas.onclick = () => canvas.requestPointerLock();
-
-// ------------------------
-// Camera
-// ------------------------
-let camX = 8, camY = 10, camZ = 8;
-let yaw = 0;
-let pitch = 0;
-const worldUp = {x:0, y:1, z:0};
-
-// Movement state
-let keys = {};
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup", e => keys[e.key] = false);
-
-document.addEventListener("mousemove", e => {
-    if (document.pointerLockElement !== canvas) return;
-
-    yaw -= e.movementX * 0.0028;
-    pitch -= e.movementY * 0.0028;
-
-    // Clamp pitch to avoid camera flipping and roll
-    const limit = Math.PI/2 - 0.01;
-    pitch = Math.max(-limit, Math.min(limit, pitch));
+// Build camera basis (Minecraft style, no roll)
+const forward = normalize({
+    x: Math.cos(pitch) * Math.cos(yaw),
+    y: Math.sin(pitch),
+    z: Math.cos(pitch) * Math.sin(yaw)
 });
 
-// --------------------------------------------
-// Block world (simple voxel test world)
-// --------------------------------------------
-const world = {};
-function set(x,y,z,val){ world[`${x},${y},${z}`]=val; }
-function get(x,y,z){ return world[`${x},${y},${z}`]; }
+// Right = forward × worldUp
+let right = cross(worldUp, forward);
+right = normalize(right);
 
-// Generate simple terrain
-for (let x=0;x<32;x++){
-    for (let z=0;z<32;z++){
-        let h = 8 + Math.floor(Math.sin(x*0.3)+Math.cos(z*0.3)*1.5);
-        for (let y=0;y<h;y++){
-            set(x,y,z,1);
-        }
-    }
-}
+// True up = right × forward
+let camUp = cross(right, forward);
 
-// --------------------------------------------
-// Math helpers
-// --------------------------------------------
-function normalize(v){
-    const l = Math.hypot(v.x, v.y, v.z);
-    if (l === 0) return {x:0,y:0,z:0};
-    return {x:v.x/l, y:v.y/l, z:v.z/l};
-}
-function cross(a,b){
-    return {
-        x: a.y*b.z - a.z*b.y,
-        y: a.z*b.x - a.x*b.z,
-        z: a.x*b.y - a.y*b.x
-    };
-}
+// Camera projection plane
+const fov = Math.tan((70 * Math.PI/180) / 2);
 
-// --------------------------------------------
-// Render loop
-// --------------------------------------------
-function updateMovement(){
-    // Compute forward direction from yaw/pitch
-    const forward = {
-        x: Math.cos(pitch)*Math.cos(yaw),
-        y: Math.sin(pitch),
-        z: Math.cos(pitch)*Math.sin(yaw)
-    };
+// Render
+for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
 
-    // Right = forward × worldUp
-    let right = cross(worldUp, forward);
-    right = normalize(right);
+        // Convert pixel to camera space
+        let px = ( (x / canvas.width) * 2 - 1 ) * fov;
+        let py = ( (y / canvas.height) * 2 - 1 ) * fov;
 
-    // Correct forward to be horizontal for WASD
-    const forwardFlat = normalize({x:forward.x, y:0, z:forward.z});
+        // Build ray direction
+        let dir = normalize({
+            x: forward.x + right.x * px + camUp.x * py,
+            y: forward.y + right.y * px + camUp.y * py,
+            z: forward.z + right.z * px + camUp.z * py
+        });
 
-    const speed = 0.12;
+        // Raymarch
+        let sx = camX;
+        let sy = camY;
+        let sz = camZ;
 
-    if (keys["w"]) { camX += forwardFlat.x * speed; camZ += forwardFlat.z * speed; }
-    if (keys["s"]) { camX -= forwardFlat.x * speed; camZ -= forwardFlat.z * speed; }
-    if (keys["a"]) { camX -= right.x * speed; camZ -= right.z * speed; }
-    if (keys["d"]) { camX += right.x * speed; camZ += right.z * speed; }
-    if (keys[" "]) camY += speed;
-}
+        for (let t = 0; t < 40; t++) {
+            sx += dir.x * 0.5;
+            sy += dir.y * 0.5;
+            sz += dir.z * 0.5;
 
-function draw(){
-    updateMovement();
+            const bx = Math.floor(sx);
+            const by = Math.floor(sy);
+            const bz = Math.floor(sz);
 
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-
-    // Camera direction vector
-    const dir = {
-        x: Math.cos(pitch)*Math.cos(yaw),
-        y: Math.sin(pitch),
-        z: Math.cos(pitch)*Math.sin(yaw)
-    };
-
-    // Very simple raymarch voxel render
-    const fov = 70 * (Math.PI/180);
-    const halfW = canvas.width/2;
-    const halfH = canvas.height/2;
-
-    for (let y=0;y<canvas.height;y++){
-        for (let x=0;x<canvas.width;x++){
-
-            let rx = (x - halfW) / halfW;
-            let ry = (y - halfH) / halfH;
-
-            // Apply FOV
-            let rdx = dir.x + rx*Math.cos(yaw);
-            let rdy = dir.y + ry;
-            let rdz = dir.z + rx*Math.sin(yaw);
-
-            let len = Math.hypot(rdx,rdy,rdz);
-            rdx/=len; rdy/=len; rdz/=len;
-
-            let sx = camX;
-            let sy = camY;
-            let sz = camZ;
-
-            for (let t=0; t<40; t++){
-                sx += rdx*0.5;
-                sy += rdy*0.5;
-                sz += rdz*0.5;
-
-                let bx = Math.floor(sx);
-                let by = Math.floor(sy);
-                let bz = Math.floor(sz);
-
-                if (get(bx,by,bz)){
-                    ctx.fillStyle = `rgb(${50+by*10},${120+by*5},${50})`;
-                    ctx.fillRect(x,y,1,1);
-                    break;
-                }
+            if (get(bx, by, bz)) {
+                ctx.fillStyle = `rgb(${50+by*10},${120+by*5},${50})`;
+                ctx.fillRect(x, y, 1, 1);
+                break;
             }
         }
     }
-
-    requestAnimationFrame(draw);
 }
-
-draw();
-</script>
-</body>
-</html>
