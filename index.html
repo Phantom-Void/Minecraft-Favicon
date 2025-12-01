@@ -1,146 +1,181 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<title>Minecraft Favicon</title>
-
-<!-- Dark theme body -->
-<style>
-    body {
-        margin: 0;
-        background: #0d0d0d;
-        color: white;
-        font-family: Arial, sans-serif;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        flex-direction: column;
-        text-align: center;
-    }
-    .arrow {
-        font-size: 80px;
-        margin-bottom: 10px;
-        color: #00ff00;
-        user-select: none;
-    }
-    .label {
-        font-size: 30px;
-        opacity: 0.8;
-    }
-</style>
+<title>Favicon Minecraft Raycaster</title>
 
 <link id="favicon" rel="icon" href="">
-<script>
-// ----- Favicon Canvas -----
-const fav = document.createElement("canvas");
-fav.width = 32;
-fav.height = 32;
-const ctx = fav.getContext("2d");
 
-// ----- World Setup -----
-const blocks = [];
-const WORLD_SIZE = 7;
-
-// Simple random voxel terrain
-for (let x = 0; x < WORLD_SIZE; x++) {
-    for (let z = 0; z < WORLD_SIZE; z++) {
-        const height = Math.floor(Math.random()*3 + 2);
-        for (let y = 0; y < height; y++) {
-            blocks.push({x, y, z});
-        }
+<style>
+    body {
+        background: #0a0a0a;
+        color: white;
+        font-family: Arial;
+        text-align: center;
+        margin-top: 30px;
     }
-}
-
-// ----- Camera -----
-let camX = 3.5;
-let camY = 3;
-let camZ = 10;
-
-let yaw = 0;   // left-right rotation
-let pitch = 0; // up-down rotation
-
-// Movement keys
-const keys = {};
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup", e => keys[e.key] = false);
-
-// ----- Utility -----
-function isoProject(x, y, z) {
-    // Rotate around Y (yaw)
-    let rx = x * Math.cos(yaw) - z * Math.sin(yaw);
-    let rz = x * Math.sin(yaw) + z * Math.cos(yaw);
-
-    // Move world relative to camera
-    rx -= camX;
-    y  -= camY;
-    rz -= camZ;
-
-    // Very cheap projection
-    let px = rx * 4 + 16;
-    let py = y * -3 + rz * 2 + 16;
-
-    return [px, py];
-}
-
-// ----- Render -----
-function render() {
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0,0,32,32);
-
-    for (let b of blocks) {
-        const [px, py] = isoProject(b.x, b.y, b.z);
-        ctx.fillStyle = "#00ff00";  // green blocks
-        ctx.fillRect(px, py, 3, 3);
+    #view {
+        image-rendering: pixelated;
+        width: 300px;
+        height: 300px;
+        border: 3px solid #444;
     }
-
-    document.getElementById("favicon").href = fav.toDataURL();
-
-    requestAnimationFrame(render);
-}
-
-// ----- Controls -----
-function updateControls() {
-    const speed = 0.05;
-
-    // WASD movement
-    if (keys["w"]) {
-        camZ -= Math.cos(yaw) * speed;
-        camX -= Math.sin(yaw) * speed;
-    }
-    if (keys["s"]) {
-        camZ += Math.cos(yaw) * speed;
-        camX += Math.sin(yaw) * speed;
-    }
-    if (keys["a"]) {
-        camX -= Math.cos(yaw) * speed;
-        camZ += Math.sin(yaw) * speed;
-    }
-    if (keys["d"]) {
-        camX += Math.cos(yaw) * speed;
-        camZ -= Math.sin(yaw) * speed;
-    }
-
-    // Arrow key look
-    if (keys["ArrowLeft"])  yaw -= 0.03;
-    if (keys["ArrowRight"]) yaw += 0.03;
-    if (keys["ArrowUp"])    camY -= 0.05;
-    if (keys["ArrowDown"])  camY += 0.05;
-
-    requestAnimationFrame(updateControls);
-}
-
-// Start loops
-render();
-updateControls();
-</script>
-
+</style>
 
 </head>
 <body>
 
-<div class="arrow">↑</div>
-<div class="label">minecraft (in favicon)</div>
+<h1>Favicon Minecraft (Raycasting)</h1>
+<p>This is what the favicon is rendering (zoomed in):</p>
+<canvas id="view" width="60" height="60"></canvas>
+
+<script>
+// ==============================
+// SETUP
+// ==============================
+const view = document.getElementById("view");
+const vctx = view.getContext("2d");
+
+// Favicon canvas
+const fav = document.createElement("canvas");
+fav.width = 16;
+fav.height = 16;
+const fctx = fav.getContext("2d");
+
+// ==============================
+// WORLD MAP (simple blocks)
+// ==============================
+// 0 = air, 1 = stone, 2 = dirt, 3 = grass
+const map = [
+  [1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,1],
+  [1,0,2,2,2,0,0,1],
+  [1,0,2,3,2,0,0,1],
+  [1,0,2,2,2,0,0,1],
+  [1,0,0,0,0,0,0,1],
+  [1,0,0,0,3,3,0,1],
+  [1,1,1,1,1,1,1,1],
+];
+
+const MAP_W = 8;
+const MAP_H = 8;
+
+// ==============================
+// PLAYER
+// ==============================
+let px = 4;
+let py = 4;
+let angle = 0;
+
+const keys = {};
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup",   e => keys[e.key] = false);
+
+// ==============================
+// COLLECT COLORS FOR BLOCKS
+// ==============================
+function blockColor(id) {
+    if (id === 1) return "#808080"; // stone
+    if (id === 2) return "#a0522d"; // dirt
+    if (id === 3) return "#00cc00"; // grass
+    return null;
+}
+
+// ==============================
+// RAYCAST FUNCTION
+// ==============================
+function castRay(angle) {
+    let dx = Math.cos(angle);
+    let dy = Math.sin(angle);
+
+    let dist = 0;
+    while (dist < 20) {
+        let rx = Math.floor(px + dx * dist);
+        let ry = Math.floor(py + dy * dist);
+
+        if (map[ry][rx] !== 0) {
+            return {dist, id: map[ry][rx]};
+        }
+        dist += 0.05;
+    }
+    return {dist: 20, id: 0};
+}
+
+// ==============================
+// RENDER FRAME
+// ==============================
+function render() {
+
+    // Clear canvases
+    vctx.fillStyle = "#000";
+    vctx.fillRect(0,0,60,60);
+    fctx.fillStyle = "#000";
+    fctx.fillRect(0,0,16,16);
+
+    for (let x = 0; x < 60; x++) {
+        let rayAngle = angle + (x - 30) * 0.03;
+        let hit = castRay(rayAngle);
+
+        if (hit.id !== 0) {
+            let height = Math.max(1, 40 / hit.dist);
+            vctx.fillStyle = blockColor(hit.id);
+            vctx.fillRect(x, 30 - height/2, 1, height);
+        }
+    }
+
+    // tiny favicon render
+    for (let x = 0; x < 16; x++) {
+        let rayAngle = angle + (x - 8) * 0.12;
+        let hit = castRay(rayAngle);
+
+        if (hit.id !== 0) {
+            let height = Math.max(1, 12 / hit.dist);
+            fctx.fillStyle = blockColor(hit.id);
+            fctx.fillRect(x, 8 - height/2, 1, height);
+        }
+    }
+
+    // set favicon
+    document.getElementById("favicon").href = fav.toDataURL("image/png");
+
+    requestAnimationFrame(render);
+}
+
+// ==============================
+// MOVEMENT LOOP
+// ==============================
+function movement() {
+    const speed = 0.05;
+
+    if (keys["ArrowLeft"])  angle -= 0.05;
+    if (keys["ArrowRight"]) angle += 0.05;
+
+    let dx = Math.cos(angle);
+    let dy = Math.sin(angle);
+
+    if (keys["w"]) {
+        px += dx * speed;
+        py += dy * speed;
+    }
+    if (keys["s"]) {
+        px -= dx * speed;
+        py -= dy * speed;
+    }
+    if (keys["a"]) {
+        px += dy * speed;
+        py -= dx * speed;
+    }
+    if (keys["d"]) {
+        px -= dy * speed;
+        py += dx * speed;
+    }
+
+    requestAnimationFrame(movement);
+}
+
+render();
+movement();
+</script>
 
 </body>
 </html>
