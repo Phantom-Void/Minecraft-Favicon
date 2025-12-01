@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Raycast (loading...)</title>
+<title>Open Grassland — Loading...</title>
 <link id="favicon" rel="icon" href="">
 <style>
   :root{--bg:#071018;--muted:#9fb7c9}
   html,body{height:100%;margin:0;background:var(--bg);color:#e6f3fb;font-family:Inter,Arial,Helvetica,sans-serif}
-  .wrap{display:flex;flex-direction:column;align-items:center;padding:18px}
+  .wrap{display:flex;flex-direction:column;align-items:center;padding:14px}
   h1{margin:8px 0 10px 0}
-  canvas#view{width:640px;height:420px;border:4px solid #0f2130; image-rendering: pixelated; background:#000; display:block}
+  canvas#view{width:720px;height:480px;border:4px solid #0f2130; image-rendering: pixelated; background:#000; display:block}
   .hint{color:var(--muted);margin-top:8px;font-size:13px;text-align:center}
   .small{font-size:12px;color:#7f9cae;margin-top:8px}
   code{background:#08202a;padding:2px 6px;border-radius:4px}
@@ -18,148 +18,216 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Raycast Cave — Fake 3D</h1>
-    <canvas id="view" width="320" height="210"></canvas>
-    <div class="hint">WASD move • Mouse look (click canvas) • Arrow keys look • Space jump • LMB mine • I = inventory title • H = health title</div>
-    <div class="small">Edit the <code>map</code> array in the script to make your own levels</div>
+    <h1>Open Grassland (Raycast Heightmap)</h1>
+    <canvas id="view" width="360" height="240"></canvas>
+    <div class="hint">WASD = move • Mouse look (click canvas) • Arrow keys look • Space = jump • LMB = mine • I = inv title • H = health title</div>
+    <div class="small">64×64 heightmap world • Trees & caves • Mining drops blocks into inventory</div>
   </div>
 
 <script>
 /* ============================
-   Raycast engine (fake 3D)
-   - DDA 2D raycast
-   - look up/down (pitch), jumping (camera height)
-   - wall collision
-   - mining (remove wall cell)
-   - inventory & health in title
-   - favicon mirror
-   ============================ */
+  Raycast heightmap world — full file
+  - 64x64 heightmap with grass/dirt/stone
+  - trees placed as sprites
+  - caves carved by tunnels (setting lower heights)
+  - mining lowers column height and adds to inventory
+  - movement with step limit (can't move to tile with too-large height diff)
+  - mouse & arrow look, jump, favicon mirror
+  ============================ */
 
-/* =========== CONFIG ============ */
-const MAP = [
-  // 0 = empty, 1 = wall (solid)
-  // 20x12 example; edit to your liking (must be rectangular)
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,2,0,0,0,1,0,1,0,0,0,3,0,0,0,1],
-  [1,0,0,0,0,2,0,0,0,1,0,1,0,0,0,3,0,0,0,1],
-  [1,0,0,0,0,2,0,0,0,1,0,1,0,0,0,3,0,0,0,1],
-  [1,0,0,0,0,0,0,4,0,1,0,1,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,4,0,1,0,1,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,4,0,1,0,1,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
-];
-// note: map values >0 are considered walls; numbers can encode variant types (for inventory naming)
-const MAP_W = MAP[0].length;
-const MAP_H = MAP.length;
-
-/* rendering sizes */
-const CANVAS = document.getElementById('view');
-const CTX = CANVAS.getContext('2d');
-const VIEW_W = CANVAS.width;   // 320
-const VIEW_H = CANVAS.height;  // 210
+/* CONFIG */
+const SIZE = 64;              // world size (x,z)
+const VIEW_W = 360, VIEW_H = 240;
 const HALF_W = VIEW_W/2, HALF_H = VIEW_H/2;
-const FOV = Math.PI/3; // 60deg
-const NUM_RAYS = VIEW_W; // 1 column per pixel
-const MAX_DIST = 20;
+const FOV = Math.PI/3;
+const REACH = 6;              // mining range
+const PLAYER_EYE = 1.6;       // player eye height above ground
+const STEP_MAX = 0.9;         // max permitted vertical difference to step onto
+const MOVE_SPEED = 3.0;       // world units/second
+const JUMP_V = 5.2;
+const GRAV = 18.0;
+const FAV_SIZE = 16;
 
-/* favicon */
-const FAV = document.createElement('canvas'); FAV.width = 16; FAV.height = 16;
-const FCTX = FAV.getContext('2d');
+/* block codes (for inventory naming) */
+const AIR = 0, STONE = 1, DIRT = 2, GRASS = 3, WOOD = 4, LEAF = 5;
 
-/* player state */
-let px = 3.5, pz = 3.5;   // x,z in map
-let py = 0.5;            // camera height (y)
-let vy = 0;              // vertical velocity
-let yaw = 0;             // heading (radians)
-let pitch = 0;           // look up/down (radians) - affects vertical offset of wall rendering
-let grounded = false;
+/* canvas */
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const fav = document.createElement('canvas'); fav.width = FAV_SIZE; fav.height = FAV_SIZE;
+const fctx = fav.getContext('2d');
 
-const MOVE_SPEED = 3.0; // units/sec
-const JUMP_SPEED = 5.5;
-const GRAV = 18.0;      // units/sec^2
+/* world data structures */
+const HEIGHT = []; // HEIGHT[z][x] integer height (0..HMAX)
+const TYPE = [];   // TYPE[z][x] top block type (grass/dirt/stone/wood/leaf)
+const trees = [];  // tree sprites {x,z,h}
 
-/* controls */
-const keys = {};
-window.addEventListener('keydown', e=>{ keys[e.key] = true; if (e.key==='i'||e.key==='I'){ showInv=!showInv; updateTitle(); } if (e.key==='h'||e.key==='H'){ showHealth=!showHealth; updateTitle(); }});
+const HMAX = 20;   // practical maximum terrain height for display and generation
+
+for (let z=0; z<SIZE; z++){
+  HEIGHT[z]=new Array(SIZE).fill(0);
+  TYPE[z]=new Array(SIZE).fill(AIR);
+}
+
+/* small PRNG helpers */
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function randint(a,b){ return Math.floor(rand(a,b+1)); }
+
+/* noise / heightmap */
+function smoothNoise(x,y){
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  function ph(i){ i = (i<<13)^i; return 1 - ((i*(i*i*15731+789221)+1376312589)&0x7fffffff)/1073741824.0; }
+  const v00 = ph(xi+yi*57), v10 = ph(xi+1+yi*57), v01 = ph(xi+(yi+1)*57), v11 = ph(xi+1+(yi+1)*57);
+  const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
+  const a = v00*(1-u)+v10*u;
+  const b = v01*(1-u)+v11*u;
+  return a*(1-v)+b*v;
+}
+function fractal(x,y,oct=4,scale=1){
+  let amp=1,f=1,sum=0,norm=0;
+  for(let i=0;i<oct;i++){ sum += smoothNoise(x*f/scale,y*f/scale)*amp; norm+=amp; amp*=0.5; f*=2; }
+  return sum/norm;
+}
+
+/* generate open grassy world with caves & trees */
+function genWorld(){
+  // heights
+  for (let z=0; z<SIZE; z++){
+    for (let x=0; x<SIZE; x++){
+      // multi-octave patterns + center bias
+      const n = fractal(x*0.08, z*0.08,4,12)*6
+              + fractal(x*0.02, z*0.02,3,1)*8;
+      const center = (1 - Math.hypot(x/SIZE-0.5, z/SIZE-0.5)/0.7071) * 4;
+      let h = Math.floor(8 + n + center);
+      h = Math.max(1, Math.min(HMAX-1, h));
+      HEIGHT[z][x] = h;
+      TYPE[z][x] = (h>0 ? (h>6? DIRT : GRASS) : AIR);
+    }
+  }
+
+  // carve caves: random walkers carve down heights in patches
+  for (let i=0;i<150;i++){
+    let cx = randint(2,SIZE-3), cz = randint(2,SIZE-3);
+    let len = randint(40,160);
+    while(len--){
+      // make deeper pocket
+      HEIGHT[cz][cx] = Math.max(0, HEIGHT[cz][cx] - randint(1,3));
+      cx += randint(-1,1);
+      cz += randint(-1,1);
+      cx = Math.max(2, Math.min(SIZE-3, cx));
+      cz = Math.max(2, Math.min(SIZE-3, cz));
+    }
+  }
+
+  // place trees on grass
+  for (let i=0;i<260;i++){
+    const x = randint(2,SIZE-3), z = randint(2,SIZE-3);
+    if (TYPE[z][x] !== GRASS) continue;
+    // small chance
+    if (Math.random() < 0.35) {
+      const h = randint(3,5);
+      trees.push({x:x+0.5,z:z+0.5,h});
+      // mark top block as wood for mining (on same tile)
+      TYPE[z][x] = WOOD;
+    }
+  }
+
+  // set top type mapping: if height very high stone shows
+  for (let z=0; z<SIZE; z++){
+    for (let x=0; x<SIZE; x++){
+      if (HEIGHT[z][x] >= 10) TYPE[z][x] = STONE;
+      else if (TYPE[z][x] === AIR) TYPE[z][x] = DIRT;
+    }
+  }
+}
+genWorld();
+
+/* player spawn on a decent grass tile */
+let playerX=32.5, playerZ=32.5;
+function findSpawn(){
+  for (let z=2; z<SIZE-2; z++){
+    for (let x=2; x<SIZE-2; x++){
+      if (TYPE[z][x] === GRASS){
+        playerX = x+0.5; playerZ = z+0.5; return;
+      }
+    }
+  }
+}
+findSpawn();
+
+/* player movement & camera */
+let yaw=0, pitch=0;         // yaw yaw, pitch up/down
+let velY = 0, onGround=true;
+let keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key]=true; if (e.key==='i'||e.key==='I'){ showInv=!showInv; updateTitle(); } if (e.key==='h'||e.key==='H'){ showHealth=!showHealth; updateTitle(); }});
 window.addEventListener('keyup', e=> keys[e.key]=false);
 
-/* mouse look (pointer lock) */
-CANVAS.addEventListener('click', ()=> CANVAS.requestPointerLock && CANVAS.requestPointerLock());
-window.addEventListener('pointerlockchange', ()=>{/* nothing */});
+/* mouse look */
+canvas.addEventListener('click', ()=> canvas.requestPointerLock && canvas.requestPointerLock());
 window.addEventListener('mousemove', e=>{
-  if (document.pointerLockElement === CANVAS){
-    yaw += -e.movementX * 0.0025;
-    pitch += -e.movementY * 0.0025;
-    pitch = Math.max(-0.8, Math.min(0.8, pitch));
+  if (document.pointerLockElement === canvas){
+    yaw -= e.movementX * 0.0024;
+    pitch -= e.movementY * 0.0024;
+    pitch = Math.max(-0.85, Math.min(0.85, pitch));
   }
 });
 
 /* inventory & health */
-const inventory = {};    // id -> count
-let health = 20;
-let showInv = false, showHealth = false;
-function addInv(id){ inventory[id] = (inventory[id]||0) + 1; updateTitle(); }
-function idName(id){
-  if (id===1) return "stone";
-  if (id===2) return "ore";
-  if (id===3) return "dirt";
-  if (id===4) return "wood";
-  return "block";
+const inventory = {};
+let health = 20, showInv=false, showHealth=false;
+function addInv(code){
+  inventory[code] = (inventory[code]||0) + 1;
+  updateTitle();
+}
+function blockName(code){
+  switch(code){
+    case STONE: return "stone";
+    case DIRT: return "dirt";
+    case GRASS: return "grass";
+    case WOOD: return "wood";
+    case LEAF: return "leaf";
+    default: return "block";
+  }
 }
 function updateTitle(){
-  const parts = [];
+  const parts=[];
   if (showInv){
-    const items = Object.keys(inventory).map(k => `${idName(Number(k))} x${inventory[k]}`).join(", ");
-    parts.push("Inv: " + (items||"empty"));
+    const partsI = Object.keys(inventory).map(k => `${blockName(Number(k))} x${inventory[k]}`).join(", ");
+    parts.push("Inv: "+(partsI||"empty"));
   }
   if (showHealth) parts.push(`Health: ${health}`);
-  document.title = parts.length ? parts.join(" | ") : "Raycast Cave";
+  document.title = parts.length ? parts.join(" | ") : "Open Grassland";
 }
 
-/* mining (mouse left) */
-window.addEventListener('mousedown', e=>{
-  if (e.button === 0) mineAtCenter();
-});
-
-/* =========== UTILITIES =========== */
-function mapAt(x,z){
+/* collision on heightmap: cannot move into tile where height difference > STEP_MAX */
+function tileHeightAt(x,z){
   const xi = Math.floor(x), zi = Math.floor(z);
-  if (xi < 0 || zi < 0 || xi >= MAP_W || zi >= MAP_H) return 1;
-  return MAP[zi][xi];
+  if (xi<0||zi<0||xi>=SIZE||zi>=SIZE) return 0;
+  return HEIGHT[zi][xi];
 }
-function isSolidAt(x,z){
-  return mapAt(x,z) !== 0;
+function canMoveTo(nx,nz){
+  const curH = tileHeightAt(playerX, playerZ);
+  const tgtH = tileHeightAt(nx, nz);
+  if (Math.abs(tgtH - curH) > STEP_MAX) return false;
+  // also ensure target within bounds
+  const xi = Math.floor(nx), zi = Math.floor(nz);
+  if (xi<1||zi<1||xi>=SIZE-1||zi>=SIZE-1) return false;
+  return true;
 }
 
-/* DDA raycast in 2D grid returning first wall hit {mapX,mapZ,distance,hitX,hitZ,side} */
-function castRay2D(rx, rz, angle, maxD=MAX_DIST){
-  // ray origin rx,rz; direction vector
+/* mining: cast a short horizontal ray and pick the tile; lower its height */
+function cast2D(rx, rz, angle, maxD=REACH){
   const dx = Math.cos(angle), dz = Math.sin(angle);
-  // current map square
-  let mapX = Math.floor(rx);
-  let mapZ = Math.floor(rz);
-
-  // length of ray from one x or z-side to next
+  let mapX = Math.floor(rx), mapZ = Math.floor(rz);
   const deltaDistX = Math.abs(1 / dx);
   const deltaDistZ = Math.abs(1 / dz);
-
-  // step and initial sideDist
   let stepX = dx < 0 ? -1 : 1;
   let stepZ = dz < 0 ? -1 : 1;
-  let sideDistX, sideDistZ;
-
-  if (dx < 0) sideDistX = (rx - mapX) * deltaDistX;
-  else sideDistX = (mapX + 1.0 - rx) * deltaDistX;
-  if (dz < 0) sideDistZ = (rz - mapZ) * deltaDistZ;
-  else sideDistZ = (mapZ + 1.0 - rz) * deltaDistZ;
-
-  let side = 0; // 0 = hit x-side, 1 = hit z-side
+  let sideDistX = dx < 0 ? (rx - mapX) * deltaDistX : (mapX + 1.0 - rx) * deltaDistX;
+  let sideDistZ = dz < 0 ? (rz - mapZ) * deltaDistZ : (mapZ + 1.0 - rz) * deltaDistZ;
   let dist = 0;
-
+  let side = 0;
   while (dist < maxD){
     if (sideDistX < sideDistZ){
       sideDistX += deltaDistX;
@@ -172,221 +240,238 @@ function castRay2D(rx, rz, angle, maxD=MAX_DIST){
       side = 1;
       dist = sideDistZ - deltaDistZ;
     }
-    // out of bounds -> treat as wall
-    if (mapX < 0 || mapZ < 0 || mapX >= MAP_W || mapZ >= MAP_H){
-      return {mapX, mapZ, distance: dist, side, hitX: rx + dx * dist, hitZ: rz + dz * dist};
-    }
-    if (MAP[mapZ][mapX] !== 0){
-      return {mapX, mapZ, distance: dist, side, hitX: rx + dx * dist, hitZ: rz + dz * dist};
-    }
+    if (mapX < 0 || mapZ < 0 || mapX >= SIZE || mapZ >= SIZE) return null;
+    // if tile has any non-zero height treat as hittable
+    if (HEIGHT[mapZ][mapX] > 0) return {mapX,mapZ,dist,side};
   }
   return null;
 }
-
-/* =========== MOVEMENT & COLLISION =========== */
-/* We use simple axis-aligned collision — before applying move, test target tile(s).
-   Player represented as circle with radius PLAYER_R. If tile at target position is solid -> block movement.
-*/
-const PLAYER_R = 0.28;
-function canMoveTo(nx, nz){
-  // check several sample points around circle
-  const samples = [
-    [0,0],
-    [PLAYER_R, 0],
-    [-PLAYER_R, 0],
-    [0, PLAYER_R],
-    [0, -PLAYER_R],
-    [PLAYER_R*0.7, PLAYER_R*0.7],
-    [-PLAYER_R*0.7, PLAYER_R*0.7],
-    [PLAYER_R*0.7, -PLAYER_R*0.7],
-    [-PLAYER_R*0.7, -PLAYER_R*0.7]
-  ];
-  for (const s of samples){
-    const sx = nx + s[0], sz = nz + s[1];
-    if (isSolidAt(sx, sz)) return false;
-  }
-  return true;
-}
-
-/* =========== JUMP / VERTICAL =========== */
-let jumpRequested = false;
-window.addEventListener('keydown', e=>{
-  if (e.code === 'Space') { jumpRequested = true; e.preventDefault(); }
-});
-function updateVertical(dt){
-  // if on ground and jump requested -> apply vy
-  if (grounded && jumpRequested){
-    vy = JUMP_SPEED;
-    grounded = false;
-  }
-  jumpRequested = false;
-  // integrate
-  vy -= GRAV * dt;
-  py += vy * dt;
-  // ground check: if camera height below floor height (we keep floor at y=0)
-  if (py <= 0.5){ // floor baseline (0 = floor top)
-    py = 0.5;
-    vy = 0;
-    grounded = true;
-  }
-  // NOTE: walls are vertical columns; jumping doesn't let you pass through a wall.
-}
-
-/* =========== MINING =========== */
-function mineAtCenter(){
-  // cast a ray from player horizontally in yaw direction, find first wall within reach
-  const originX = px, originZ = pz;
-  const dir = {x: Math.cos(yaw), z: Math.sin(yaw)};
-  const hit = castRay2D(originX, originZ, yaw, REACH);
+function mineCenter(){
+  const hit = cast2D(playerX, playerZ, yaw, REACH);
   if (!hit) return;
-  // remove block, add to inventory
-  const id = MAP[hit.mapZ][hit.mapX];
-  if (id !== 0){
-    addInv(id);
-    MAP[hit.mapZ][hit.mapX] = 0;
-  }
+  const x = hit.mapX, z = hit.mapZ;
+  if (HEIGHT[z][x] <= 0) return;
+  // determine block type from height-ish mapping
+  let code = DIRT;
+  if (TYPE[z][x] === STONE) code = STONE;
+  else if (TYPE[z][x] === WOOD) code = WOOD;
+  else if (TYPE[z][x] === LEAF) code = LEAF;
+  else if (TYPE[z][x] === GRASS) code = DIRT;
+  addInv(code);
+  HEIGHT[z][x] = Math.max(0, HEIGHT[z][x] - 1);
+  // if we removed a tree top, clear tree (approx)
+  TYPE[z][x] = HEIGHT[z][x] > 9 ? STONE : (HEIGHT[z][x] > 0 ? DIRT : AIR);
 }
 
-/* =========== RENDERING =========== */
+/* handle left click mining */
+window.addEventListener('mousedown', (e)=>{
+  if (e.button === 0) mineCenter();
+});
+
+/* camera / rendering helpers */
+function shadeHex(hex, f){
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  const nr = Math.max(0, Math.min(255, Math.round(r*f)));
+  const ng = Math.max(0, Math.min(255, Math.round(g*f)));
+  const nb = Math.max(0, Math.min(255, Math.round(b*f)));
+  return '#'+[nr,ng,nb].map(n=>n.toString(16).padStart(2,'0')).join('');
+}
+
+function lerp(a,b,t){ return a + (b-a)*t; }
+
+/* render loop: raycast per column, compute vertical slice height based on block column top relative to player's eye */
 function render(){
-  // clear sky+floor
-  const skyGrad = CTX.createLinearGradient(0,0,0,HALF_H);
-  skyGrad.addColorStop(0, '#89c2ff');
-  skyGrad.addColorStop(1, '#1f2840');
-  CTX.fillStyle = skyGrad;
-  CTX.fillRect(0,0,VIEW_W, HALF_H);
+  // sky
+  const grad = ctx.createLinearGradient(0,0,0,HALF_H);
+  grad.addColorStop(0, '#9bd3ff');
+  grad.addColorStop(1, '#3a4b6b');
+  ctx.fillStyle = grad; ctx.fillRect(0,0,VIEW_W, HALF_H);
+  // ground baseline
+  ctx.fillStyle = '#3a3a3a'; ctx.fillRect(0, HALF_H, VIEW_W, HALF_H);
 
-  CTX.fillStyle = '#2d2d2d'; // floor color
-  CTX.fillRect(0, HALF_H, VIEW_W, HALF_H);
-
-  // for each column, cast ray and draw vertical slice
-  for (let x = 0; x < NUM_RAYS; x++){
-    // camera plane mapping from column to angle offset
-    const cameraX = (2 * x / NUM_RAYS) - 1; // -1 .. 1
+  // draw columns/walls
+  for (let x=0; x<VIEW_W; x++){
+    const cameraX = (2 * x / VIEW_W) - 1;
     const rayAngle = yaw + Math.atan(cameraX * Math.tan(FOV/2));
-    const hit = castRay2D(px, pz, rayAngle, MAX_DIST);
-    if (!hit) continue;
+    // cast in 2D to first column with height
+    const hit = cast2D(playerX, playerZ, rayAngle, 80);
+    if (!hit){
+      // no tile: skip
+      continue;
+    }
+    let dist = hit.dist;
+    // fish-eye correction
+    const diff = normalizeAngle(rayAngle - yaw);
+    dist *= Math.cos(diff);
 
-    let dist = hit.distance;
-    // correct fisheye by multiplying by cos between ray and yaw
-    const angDiff = normalizeAngle(rayAngle - yaw);
-    dist *= Math.cos(angDiff);
+    // top height of column
+    const colH = HEIGHT[hit.mapZ][hit.mapX];
+    const topWorldY = colH; // world units
+    const playerWorldY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE; // player's eye y
 
-    // wall height on screen
-    const wallHeight = Math.min(VIEW_H*2, (VIEW_H * 1.0) / (dist + 0.0001));
+    // compute apparent height on screen: the taller the column above player's eye, the larger slice
+    // we use simple perspective formula: apparent_size = scale * (topWorldY - (playerWorldY - PLAYER_EYE)) / dist
+    const heightWorld = Math.max(0.01, topWorldY - (playerWorldY - PLAYER_EYE));
+    // base scale tuning for look
+    const sliceHeight = Math.min(VIEW_H*2, (VIEW_H * 1.5) * (heightWorld / Math.max(0.0001, dist)));
+    const yTop = Math.round(HALF_H - sliceHeight/2 - ( (playerWorldY - PLAYER_EYE) - 0 ) * 6); // adjust vertical based on eye
+    const yBottom = Math.round(yTop + sliceHeight);
 
-    // vertical offset due to pitch & jump (pitch moves the view up/down)
-    const verticalOffset = (pitch * 80) + (py - 0.5) * 60; // tweak multipliers for feel
+    // color by top type
+    const t = TYPE[hit.mapZ][hit.mapX];
+    let base = '#8d8d8d';
+    if (t === GRASS) base = '#5fb75f';
+    if (t === DIRT) base = '#b07f3b';
+    if (t === STONE) base = '#8d8d8d';
+    if (t === WOOD) base = '#6b3f24';
+    if (t === LEAF) base = '#2fa04a';
 
-    // compute slice positions
-    const yTop = Math.round(HALF_H - wallHeight/2 + verticalOffset);
-    const yBottom = Math.round(HALF_H + wallHeight/2 + verticalOffset);
+    // side shading using hit.side
+    const shadeFactor = hit.side === 1 ? 0.75 : 1.0;
+    ctx.fillStyle = shadeHex(base, shadeFactor);
+    ctx.fillRect(x, yTop, 1, Math.max(1, yBottom - yTop));
 
-    // shade color depending on block id and side
-    const id = MAP[hit.mapZ][hit.mapX];
-    let color = '#888888';
-    if (id === 1) color = '#8d8d8d';
-    if (id === 2) color = '#b07f3b';
-    if (id === 3) color = '#7fa35d';
-    if (id === 4) color = '#6b3f24';
-
-    // darker if side (simulate lighting)
-    const shadeFactor = hit.side === 1 ? 0.8 : 1.0;
-    const shaded = shadeHex(color, shadeFactor);
-
-    // draw vertical slice (1 px wide)
-    CTX.fillStyle = shaded;
-    CTX.fillRect(x, yTop, 1, Math.max(1, yBottom - yTop));
-
-    // floor/ceiling simple shading: draw a small stripe under wall to indicate floor meeting wall
-    CTX.fillStyle = '#111111';
-    if (yBottom < VIEW_H) CTX.fillRect(x, yBottom, 1, 1);
+    // little floor line
+    ctx.fillStyle = '#222'; ctx.fillRect(x, Math.min(VIEW_H-1, yBottom), 1, 1);
   }
 
-  // HUD text
-  CTX.fillStyle = 'rgba(0,0,0,0.4)';
-  CTX.fillRect(6,6,190,34);
-  CTX.fillStyle = '#fff';
-  CTX.font = '11px monospace';
-  CTX.fillText(`Health: ${health}`, 12, 20);
-  const invItems = Object.keys(inventory).map(k => `${idName(Number(k))}:${inventory[k]}`).slice(0,5).join(' ');
-  CTX.fillText(`Inv: ${invItems || 'empty'}`, 12, 36);
+  // draw tree sprites (simple billboards) sorted by distance back->front
+  const sprites = trees.map(s=>{
+    const dx = s.x - playerX, dz = s.z - playerZ;
+    const dist = Math.hypot(dx, dz);
+    return {s, dx, dz, dist};
+  }).filter(it=> it.dist < 60);
+  sprites.sort((a,b)=> b.dist - a.dist);
+  for (const it of sprites){
+    const s = it.s;
+    // compute angle to sprite relative to camera
+    const ang = Math.atan2(s.z - playerZ, s.x - playerX);
+    const relAng = normalizeAngle(ang - yaw);
+    // if outside FOV skip
+    if (Math.abs(relAng) > FOV/2 + 0.6) continue;
+    // project: similar idea to column
+    const projDist = it.dist * Math.cos(relAng); // frontal distance
+    const size = Math.min(120, (VIEW_H * 1.6) / Math.max(0.4, projDist/ (s.h/3)));
+    const screenX = Math.round(HALF_W + Math.tan(relAng) * HALF_W / Math.tan(FOV/2));
+    // vertical placement using ground height at sprite
+    const groundY = getPlayerGroundY(s.x, s.z);
+    const eyeY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE;
+    const verticalOffset = (eyeY - groundY) * 6;
+    const screenY = Math.round(HALF_H - size/2 - verticalOffset);
+    // draw trunk/foliage rectangle
+    // trunk
+    ctx.fillStyle = '#6b3f24';
+    ctx.fillRect(screenX - Math.round(size*0.12), screenY + Math.round(size*0.25), Math.round(size*0.24), Math.round(size*0.5));
+    // leaves
+    ctx.fillStyle = '#2fa04a';
+    ctx.beginPath();
+    ctx.ellipse(screenX, screenY, size*0.6, size*0.6, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
 
-  // center reticle
-  CTX.strokeStyle = 'rgba(255,255,255,0.6)';
-  CTX.beginPath();
-  CTX.moveTo(HALF_W-6, HALF_H); CTX.lineTo(HALF_W+6, HALF_H);
-  CTX.moveTo(HALF_W, HALF_H-6); CTX.lineTo(HALF_W, HALF_H+6);
-  CTX.stroke();
+  // HUD
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(6,6,230,36);
+  ctx.fillStyle = '#fff'; ctx.font='12px monospace';
+  ctx.fillText(`Health: ${health}`, 12, 22);
+  const invShort = Object.keys(inventory).map(k=> `${blockName(Number(k))}:${inventory[k]}`).slice(0,6).join(' ');
+  ctx.fillText(`Inv: ${invShort || 'empty'}`, 12, 38);
 
-  // favicon mirror (fast downscale)
-  FCTX.imageSmoothingEnabled = false;
-  FCTX.drawImage(CANVAS, 0, 0, FAV.width, FAV.height);
-  document.getElementById('favicon').href = FAV.toDataURL('image/png');
+  // reticle
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath();
+  ctx.moveTo(HALF_W-6, HALF_H); ctx.lineTo(HALF_W+6, HALF_H);
+  ctx.moveTo(HALF_W, HALF_H-6); ctx.lineTo(HALF_W, HALF_H+6);
+  ctx.stroke();
+
+  // favicon mirror
+  fctx.imageSmoothingEnabled = false;
+  fctx.drawImage(canvas, 0, 0, FAV_SIZE, FAV_SIZE);
+  document.getElementById('favicon').href = fav.toDataURL('image/png');
 }
 
-/* =========== MAIN LOOP =========== */
+/* helper to find ground y at (x,z) */
+function getPlayerGroundY(x,z){
+  const xi = Math.floor(x), zi = Math.floor(z);
+  if (xi<0||zi<0||xi>=SIZE||zi>=SIZE) return 0;
+  return HEIGHT[zi][xi];
+}
+
+/* game loop: movement, gravity, collision step, render */
 let last = performance.now();
-function loop(now){
-  const t = performance.now();
-  const dt = Math.min(0.05, (t - last) / 1000);
-  last = t;
+let velY = 0;
+function loop(){
+  const now = performance.now();
+  let dt = Math.min(0.05, (now - last)/1000);
+  last = now;
 
-  // handle movement input
-  let mvx = 0, mvz = 0;
-  const spd = (keys['Shift'] ? MOVE_SPEED*1.6 : MOVE_SPEED);
-  if (keys['w'] || keys['W']) { mvx += Math.cos(yaw) * spd * dt; mvz += Math.sin(yaw) * spd * dt; }
-  if (keys['s'] || keys['S']) { mvx -= Math.cos(yaw) * spd * dt; mvz -= Math.sin(yaw) * spd * dt; }
-  if (keys['a'] || keys['A']) { mvx += Math.sin(yaw) * spd * dt; mvz -= Math.cos(yaw) * spd * dt; }
-  if (keys['d'] || keys['D']) { mvx -= Math.sin(yaw) * spd * dt; mvz += Math.cos(yaw) * spd * dt; }
-
-  // try move with collision checks
-  if (mvx !== 0 || mvz !== 0){
-    const tryX = px + mvx, tryZ = pz;
-    if (canMoveTo(tryX, tryZ)) { px = tryX; }
-    const tryZ2 = pz + mvz, tryX2 = px;
-    if (canMoveTo(tryX2, tryZ2)) { pz = tryZ2; }
+  // rotation fallback via arrow keys
+  if (!document.pointerLockElement) {
+    if (keys['ArrowLeft']) yaw -= 1.8 * dt;
+    if (keys['ArrowRight']) yaw += 1.8 * dt;
+    if (keys['ArrowUp']) pitch = Math.max(-0.85, pitch - 1.8 * dt);
+    if (keys['ArrowDown']) pitch = Math.min(0.85, pitch + 1.8 * dt);
   }
 
-  // vertical update (gravity / jump)
-  updateVertical(dt);
+  // movement
+  let mx = 0, mz = 0;
+  const sp = (keys['Shift'] ? MOVE_SPEED*1.6 : MOVE_SPEED);
+  if (keys['w']||keys['W']) { mx += Math.cos(yaw) * sp * dt; mz += Math.sin(yaw) * sp * dt; }
+  if (keys['s']||keys['S']) { mx -= Math.cos(yaw) * sp * dt; mz -= Math.sin(yaw) * sp * dt; }
+  if (keys['a']||keys['A']) { mx += Math.sin(yaw) * sp * dt; mz -= Math.cos(yaw) * sp * dt; }
+  if (keys['d']||keys['D']) { mx -= Math.sin(yaw) * sp * dt; mz += Math.cos(yaw) * sp * dt; }
 
-  // look with arrow keys (fallback if not using pointer)
-  if (keys['ArrowLeft']) yaw -= 1.6 * dt;
-  if (keys['ArrowRight']) yaw += 1.6 * dt;
-  if (keys['ArrowUp']) pitch = clamp(pitch - 1.6 * dt, -0.8, 0.8);
-  if (keys['ArrowDown']) pitch = clamp(pitch + 1.6 * dt, -0.8, 0.8);
+  if (mx !== 0 || mz !== 0){
+    const tryX = playerX + mx, tryZ = playerZ;
+    if (canMoveTo(tryX, tryZ)) playerX = tryX;
+    const tryZ2 = playerZ + mz, tryX2 = playerX;
+    if (canMoveTo(tryX2, tryZ2)) playerZ = tryZ2;
+  }
 
+  // vertical physics (we keep player "on" surface)
+  const groundY = getPlayerGroundY(playerX, playerZ);
+  if (keys[' '] || keys['Space']) {
+    // jump if on ground
+    if (Math.abs((groundY+PLAYER_EYE) - (groundY + PLAYER_EYE)) < 100 && velY===0){
+      // allow jump when standing roughly on ground (simple)
+      velY = JUMP_V;
+    }
+  }
+  // gravity
+  velY -= GRAV * dt;
+  // integrate eye offset (pure visual bob - we don't let player fly above the surface too far)
+  // we clamp vertical camera bob to [-0.6, 2.5] relative to ground
+  let eyeYOffset = 0;
+  eyeYOffset += velY * dt;
+  // decently simple: if we fall below ground, reset and set velY=0
+  const eyePos = groundY + PLAYER_EYE + eyeYOffset;
+  if (eyePos <= groundY + PLAYER_EYE - 0.01){
+    // land
+    velY = 0;
+    eyeYOffset = 0;
+  }
+  // Note: movement constrained to surface, so we don't run full vertical collision here.
+
+  // render
   render();
 
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
-/* =========== MISC HELPERS =========== */
+/* misc helpers */
 function normalizeAngle(a){
   while (a < -Math.PI) a += Math.PI*2;
   while (a > Math.PI) a -= Math.PI*2;
   return a;
 }
-function shadeHex(hex, factor){
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  const nr = Math.max(0, Math.min(255, Math.round(r * factor)));
-  const ng = Math.max(0, Math.min(255, Math.round(g * factor)));
-  const nb = Math.max(0, Math.min(255, Math.round(b * factor)));
-  return '#' + [nr,ng,nb].map(n=>n.toString(16).padStart(2,'0')).join('');
-}
 
-/* =========== INITIAL TITLE =========== */
+/* casting & tools for console */
+window.worldDebug = { HEIGHT, TYPE, trees, player: ()=>({x:playerX,z:playerZ,y:getPlayerGroundY(playerX,playerZ)}) };
+
+/* initial title */
 updateTitle();
 
-/* =========== Export for debug in console (optional) =========== */
-window.raycastDebug = {
-  MAP,
-  get player(){ return {x:px, y:py, z:pz, yaw, pitch}; },
-  castRay2D,
-  mineAtCenter
-};
 </script>
 </body>
 </html>
