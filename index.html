@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Voxel — True 3D</title>
+<title>Voxel — True 3D (No Roll)</title>
 <link id="favicon" rel="icon" href="">
 <style>
   :root{--bg:#071018;--muted:#9fb7c9}
@@ -16,22 +16,17 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Voxel — True 3D</h1>
+    <h1>Voxel — True 3D (No Roll)</h1>
     <canvas id="view" width="240" height="160"></canvas>
     <div class="hint">WASD move • Mouse look (click canvas) • Space jump • LMB mine • I = inv title • H = health title</div>
   </div>
 
 <script>
-/* True 3D Voxel raycasting — single-file engine
-   - uses user's world gen + storage
-   - robust capsule collision + vertical snap
-   - safe spawn
-   - mining, favicon mirror, HUD
-*/
+/* True 3D Voxel engine — no camera roll, corrected camera basis + basic lighting */
 
 /* CONFIG */
 const W = 64, D = 64, H = 64;
-const CANVAS_W = 240, CANVAS_H = 160; // internal resolution
+const CANVAS_W = 240, CANVAS_H = 160;
 const FOV = Math.PI/3;
 const REACH = 6;
 const FAV = 16;
@@ -103,7 +98,7 @@ function genWorld(){
 }
 genWorld();
 
-/* ---------- SAFE SPAWN (avoid thin cave roofs) ---------- */
+/* ---------- SAFE SPAWN ---------- */
 let px=4.5, py=20.0, pz=4.5;
 (function findSpawn(){
   outer:
@@ -113,14 +108,11 @@ let px=4.5, py=20.0, pz=4.5;
         const here = getBlock(x, y, z);
         const above = getBlock(x, y+1, z);
         const below = getBlock(x, y-1, z);
-        if(here !== AIR || above !== AIR) continue; // need space for player
-        if(below === AIR) continue; // must have solid directly below
-        // ensure a few blocks of solidity below (no cave pocket)
+        if(here !== AIR || above !== AIR) continue;
+        if(below === AIR) continue;
         if(getBlock(x, y-2, z) === AIR) continue;
         if(getBlock(x, y-3, z) === AIR) continue;
-        px = x + 0.5;
-        py = y + 0.01;
-        pz = z + 0.5;
+        px = x + 0.5; py = y + 0.01; pz = z + 0.5;
         break outer;
       }
     }
@@ -151,18 +143,21 @@ window.addEventListener('keyup', e=> keys[e.key]=false);
 canvas.addEventListener('click', ()=> canvas.requestPointerLock && canvas.requestPointerLock());
 window.addEventListener('mousemove', e=>{
   if(document.pointerLockElement === canvas){
+    // mouse movement: update yaw and pitch only
     yaw -= e.movementX * 0.0024;
     pitch -= e.movementY * 0.0024;
-    pitch = Math.max(-1.35, Math.min(1.35, pitch));
+    // clamp pitch to avoid roll/singularity
+    const P_CLAMP = Math.PI/2 - 0.01;
+    pitch = Math.max(-P_CLAMP, Math.min(P_CLAMP, pitch));
   }
 });
 
 /* ---------- TITLE / INV ---------- */
 function addToInv(id){ inventory[id] = (inventory[id]||0) + 1; updateTitle(); }
 function blockName(id){ switch(id){ case STONE:return'stone'; case DIRT:return'dirt'; case GRASS:return'grass'; case LOG:return'wood'; case LEAF:return'leaf'; default: return'air'; } }
-function updateTitle(){ const parts=[]; if(showInv){ const p=Object.keys(inventory).map(k=>`${blockName(Number(k))} x${inventory[k]}`).join(', '); parts.push('Inv: '+(p||'empty')); } if(showHealth) parts.push(`Health: ${health}`); document.title = parts.length?parts.join(' | '):'Voxel — True 3D'; }
+function updateTitle(){ const parts=[]; if(showInv){ const p=Object.keys(inventory).map(k=>`${blockName(Number(k))} x${inventory[k]}`).join(', '); parts.push('Inv: '+(p||'empty')); } if(showHealth) parts.push(`Health: ${health}`); document.title = parts.length?parts.join(' | '):'Voxel — True 3D (No Roll)'; }
 
-/* ---------- COLLISION: capsule AABB ---------- */
+/* ---------- COLLISION ---------- */
 function collidesAt(x,y,z){
   const minX = Math.floor(x - PR), maxX = Math.floor(x + PR);
   const minZ = Math.floor(z - PR), maxZ = Math.floor(z + PR);
@@ -177,7 +172,7 @@ function collidesAt(x,y,z){
   return false;
 }
 
-/* ---------- MOVEMENT (improved vertical snap) ---------- */
+/* ---------- MOVEMENT ---------- */
 function movementStep(dt){
   // fallback arrow rotation
   if(document.pointerLockElement !== canvas){
@@ -211,19 +206,15 @@ function movementStep(dt){
   const newY = py + vy * dt;
 
   if (vy <= 0) {
-    // falling: if no collision at newY, fall; else snap to top of the voxel you hit
     if(!collidesAt(px, newY, pz)){
       py = newY;
       grounded = false;
     } else {
-      // place capsule bottom on top of the collided block
-      // find the integer voxel we are landing on (floor(newY))
       py = Math.floor(newY) + 1;
       vy = 0;
       grounded = true;
     }
   } else {
-    // rising: check head collision
     if(collidesAt(px, newY + PH - 0.001, pz)){
       vy = 0;
     } else {
@@ -233,11 +224,13 @@ function movementStep(dt){
   }
 }
 
-/* ---------- 3D DDA Voxel Raycast ---------- */
-/* returns first solid voxel hit and t distance along the ray */
+/* ---------- 3D DDA raycast (returns normal for lighting) ---------- */
 function castRay(origin, dir, maxDist=MAX_RENDER_DIST){
   let ox=origin.x, oy=origin.y, oz=origin.z;
   let vx=Math.floor(ox), vyv=Math.floor(oy), vz=Math.floor(oz);
+
+  // if origin is outside world, return null
+  if(vx<0||vyv<0||vz<0||vx>=W||vyv>=H||vz>=D) return null;
 
   const stepX = dir.x > 0 ? 1 : -1;
   const stepY = dir.y > 0 ? 1 : -1;
@@ -254,40 +247,67 @@ function castRay(origin, dir, maxDist=MAX_RENDER_DIST){
   let t = 0;
   const maxT = maxDist / Math.max(1e-6, Math.hypot(dir.x,dir.y,dir.z));
 
+  // check starting voxel (in case camera is inside a block)
+  if(getBlock(vx,vyv,vz)!==AIR) return { x:vx, y:vyv, z:vz, block:getBlock(vx,vyv,vz), dist:0, normal:{x:0,y:0,z:0} };
+
+  let lastStep = null;
   while(t <= maxT){
+    if(tMaxX <= tMaxY && tMaxX <= tMaxZ){
+      vx += stepX; t = tMaxX; tMaxX += tDeltaX; lastStep = {axis:'x', sign:stepX};
+    } else if(tMaxY <= tMaxX && tMaxY <= tMaxZ){
+      vyv += stepY; t = tMaxY; tMaxY += tDeltaY; lastStep = {axis:'y', sign:stepY};
+    } else {
+      vz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; lastStep = {axis:'z', sign:stepZ};
+    }
+
     if(vx<0||vyv<0||vz<0||vx>=W||vyv>=H||vz>=D) break;
     const b = getBlock(vx,vyv,vz);
-    if(b!==AIR) return {x:vx,y:vyv,z:vz,block:b,dist:t};
-    // step to next voxel
-    if(tMaxX <= tMaxY && tMaxX <= tMaxZ){
-      vx += stepX; t = tMaxX; tMaxX += tDeltaX;
-    } else if(tMaxY <= tMaxX && tMaxY <= tMaxZ){
-      vyv += stepY; t = tMaxY; tMaxY += tDeltaY;
-    } else {
-      vz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ;
+    if(b!==AIR){
+      // normal points outward from the surface hit; the normal is opposite the stepping direction
+      let normal = {x:0,y:0,z:0};
+      if(lastStep){
+        if(lastStep.axis==='x') normal.x = -lastStep.sign;
+        if(lastStep.axis==='y') normal.y = -lastStep.sign;
+        if(lastStep.axis==='z') normal.z = -lastStep.sign;
+      }
+      return {x:vx,y:vyv,z:vz,block:b,dist:t,normal:normal};
     }
   }
   return null;
 }
 
-/* ---------- CAMERA BASIS ---------- */
+/* ---------- CAMERA BASIS (no roll) ---------- */
 function cameraRayDir(pixelX, pixelY, canvasW=CANVAS_W, canvasH=CANVAS_H){
+  // NDC
   const nx = (pixelX - canvasW/2) / (canvasW/2);
   const ny = (canvasH/2 - pixelY) / (canvasH/2);
   const sx = Math.tan(FOV/2) * nx;
   const sy = Math.tan(FOV/2) * ny;
 
-  const cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const cy = Math.cos(yaw), syaw = Math.sin(yaw);
+  // clamp pitch again as safeguard
+  const P_CLAMP = Math.PI/2 - 0.01;
+  const p = Math.max(-P_CLAMP, Math.min(P_CLAMP, pitch));
+  const y = yaw;
 
-  const forward = { x: cp * cy, y: sp, z: cp * syaw };
-  const right = { x: Math.sin(yaw - Math.PI/2), y: 0, z: Math.cos(yaw - Math.PI/2) };
+  // forward from spherical coords (no roll)
+  const fx = Math.cos(p) * Math.cos(y);
+  const fy = Math.sin(p);
+  const fz = Math.cos(p) * Math.sin(y);
+  const forward = {x:fx, y:fy, z:fz};
+
+  // right from yaw only (keeps camera upright)
+  const rx = Math.sin(y - Math.PI/2);
+  const rz = Math.cos(y - Math.PI/2);
+  const right = {x:rx, y:0, z:rz};
+
+  // up = cross(right, forward)
   const up = {
     x: right.y * forward.z - right.z * forward.y,
     y: right.z * forward.x - right.x * forward.z,
     z: right.x * forward.y - right.y * forward.x
   };
 
+  // combine
   let dir = {
     x: forward.x + right.x * sx + up.x * sy,
     y: forward.y + right.y * sx + up.y * sy,
@@ -312,10 +332,12 @@ function baseColor(id){
 }
 function renderFrame(){
   const buf = canvasImg.data;
-  const eye = { x: px, y: py + 0.5, z: pz }; // eye height
+  const eye = { x: px, y: py + 0.5, z: pz };
   const maxDist = MAX_RENDER_DIST;
 
-  // For performance: iterate rows then columns
+  // simple directional light (world space)
+  const lightDir = normalizeVec({x:0.7,y:0.6,z:0.3});
+
   for(let j=0;j<CANVAS_H;j++){
     for(let i=0;i<CANVAS_W;i++){
       const dir = cameraRayDir(i+0.5, j+0.5);
@@ -323,18 +345,28 @@ function renderFrame(){
       const o = (j*CANVAS_W + i)*4;
       if(hit){
         const col = baseColor(hit.block);
-        // basic distance shading
-        const shade = Math.max(0.2, 1 - hit.dist / (maxDist*0.85));
-        buf[o] = Math.round(col[0]*shade);
-        buf[o+1] = Math.round(col[1]*shade);
-        buf[o+2] = Math.round(col[2]*shade);
+        // compute simple lighting using returned normal (if available)
+        let nl = 0.6; // ambient
+        if(hit.normal){
+          const nvec = hit.normal;
+          // normalize normal (it's already axis-aligned but normalize anyway)
+          const nn = Math.hypot(nvec.x,nvec.y,nvec.z) || 1;
+          const nv = {x:nvec.x/nn, y:nvec.y/nn, z:nvec.z/nn};
+          nl += Math.max(0, dotVec(nv, lightDir)) * 0.8;
+        }
+        // distance fog / shading
+        const shadeDist = Math.max(0.15, 1 - hit.dist / (maxDist*0.9));
+        const finalShade = Math.min(1, nl * shadeDist);
+        buf[o] = Math.round(col[0]*finalShade);
+        buf[o+1] = Math.round(col[1]*finalShade);
+        buf[o+2] = Math.round(col[2]*finalShade);
         buf[o+3] = 255;
       } else {
         // sky gradient
         const t = 1 - (j / CANVAS_H);
-        buf[o] = Math.round(20 + 140 * t);
-        buf[o+1] = Math.round(30 + 120 * t);
-        buf[o+2] = Math.round(40 + 90 * t);
+        buf[o] = Math.round(30 + 150 * t);
+        buf[o+1] = Math.round(40 + 130 * t);
+        buf[o+2] = Math.round(50 + 100 * t);
         buf[o+3] = 255;
       }
     }
@@ -354,7 +386,7 @@ function renderFrame(){
   ctx.beginPath(); ctx.moveTo(CANVAS_W/2-6, CANVAS_H/2); ctx.lineTo(CANVAS_W/2+6, CANVAS_H/2);
   ctx.moveTo(CANVAS_W/2, CANVAS_H/2-6); ctx.lineTo(CANVAS_W/2, CANVAS_H/2+6); ctx.stroke();
 
-  // favicon
+  // favicon update
   fctx.imageSmoothingEnabled = false; fctx.clearRect(0,0,FAV,FAV);
   fctx.drawImage(canvas,0,0,FAV,FAV);
   document.getElementById('favicon').href = fav.toDataURL('image/png');
@@ -387,7 +419,14 @@ function loop(){
 }
 requestAnimationFrame(loop);
 
-/* convenience dev globals */
+/* ---------- UTIL ---------- */
+function dotVec(a,b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
+function normalizeVec(v){
+  const L = Math.hypot(v.x||0, v.y||0, v.z||0) || 1;
+  return {x:v.x/L, y:v.y/L, z:v.z/L};
+}
+
+/* ---------- convenience dev globals ---------- */
 window.vox = { getBlock, setBlock, blocks, player:()=>({x:px,y:py,z:pz,yaw,pitch}) };
 </script>
 </body>
