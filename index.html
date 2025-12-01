@@ -199,18 +199,31 @@ function movementStep(dt){
   let newY = py + vy * dt;
 
   // If falling (vy <= 0): check collision and snap to top of block properly
-  if(vy <= 0){
-    if(collidesAt(px, newY, pz)){
-      // snap to top of block under feet: compute foot block from *current* py (not newY)
-      const footBlock = Math.floor(py - 0.001);
-      const landedY = footBlock + 1;
-      py = landedY;
-      vy = 0;
-      grounded = true;
+// --- FIXED FALLING LOGIC (no pogo / no teleporting) ---
+if (vy <= 0) {
+    // we are trying to move from py to newY downward
+    const bottomOld = py;
+    const bottomNew = newY;
+
+    // probe slightly below the capsule
+    const probeY = Math.floor(bottomOld - 0.01);
+
+    // check if the block below is solid
+    const blockBelow = getBlock(Math.floor(px), probeY - 1, Math.floor(pz));
+
+    // Attempt to move down
+    if (!collidesAt(px, newY, pz)) {
+        // free fall
+        py = newY;
+        grounded = false;
     } else {
-      py = newY;
-      grounded = false;
+        // Collision — snap to exact voxel top
+        py = probeY;
+        vy = 0;
+        grounded = true;
     }
+}
+
   } else {
     // moving upward: if head collides, zero vy and keep py (don't push down/up)
     if(collidesAt(px, newY + PH - 0.001, pz)){
