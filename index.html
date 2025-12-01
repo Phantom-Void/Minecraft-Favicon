@@ -1,41 +1,39 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>WebGL Voxel Favicon — Minecraft-ish</title>
-
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Canvas Voxel (No WebGL) — Favicon + Zoom</title>
 <link id="favicon" rel="icon" href="">
-
 <style>
-  html,body { height:100%; margin:0; background:#071018; color:#eee; font-family:Inter, Arial; display:flex; flex-direction:column; align-items:center; }
-  h1 { margin:18px 0 6px 0; font-weight:600;}
-  #glwrap { display:flex; gap:18px; align-items:flex-start; }
-  canvas#big { width:480px; height:480px; image-rendering: pixelated; border:4px solid #0f1720; background:#000; }
-  .hud { color:#9fb7c9; font-size:14px; margin-top:8px; text-align:center; }
-  .hint { color:#7f9cae; font-size:13px; margin-top:6px; }
+  :root{--bg:#071018;--panel:#0c1720;--muted:#9fb7c9}
+  html,body{height:100%;margin:0;background:var(--bg);color:#e6f3fb;font-family:Inter,Arial,Helvetica,sans-serif}
+  .wrap{display:flex;flex-direction:column;align-items:center;padding:20px}
+  h1{margin:6px 0 12px 0;font-weight:600}
+  #view{width:480px;height:480px;border:4px solid #0f2130; image-rendering: pixelated; background:#000}
+  .hint{color:var(--muted);margin-top:8px;font-size:13px}
+  .credits{color:#7f9cae;margin-top:10px;font-size:12px}
 </style>
 </head>
 <body>
-  <h1>WebGL Voxel Favicon — Minecraft-ish</h1>
-  <div id="glwrap">
-    <canvas id="big" width="240" height="240"></canvas>
-    <div>
-      <div class="hud">WASD to move • Arrow keys to turn</div>
-      <div class="hint">Edit the `map` array in the code to change the world.</div>
-    </div>
+  <div class="wrap">
+    <h1>Canvas Voxel — Fake 3D (No WebGL)</h1>
+    <canvas id="view" width="240" height="240"></canvas>
+    <div class="hint">WASD = move • Arrow keys = turn • Edit the <code>map</code> array in the script to change the world</div>
+    <div class="credits">Favicon mirrors the view (tiny 16×16)</div>
   </div>
 
 <script>
-// -------------------------------
-// Minimal WebGL voxel renderer
-// -------------------------------
-
-// ---------- Config / Map (edit here) ----------
+/* ===========================
+   CONFIG / MAP (edit this)
+   0 = air, 1 = stone, 2 = dirt, 3 = grass
+   Keep rectangular rows of equal length.
+   =========================== */
 const map = [
   [1,1,1,1,1,1,1,1,1,1],
   [1,0,0,0,0,0,0,0,0,1],
   [1,0,2,2,2,0,0,0,0,1],
-  [1,0,2,0,0,0,0,3,0,1],
+  [1,0,2,3,2,0,0,3,0,1],
   [1,0,2,2,2,0,0,0,0,1],
   [1,0,0,0,0,0,0,0,0,1],
   [1,0,0,3,3,0,0,0,0,1],
@@ -44,424 +42,332 @@ const map = [
   [1,1,1,1,1,1,1,1,1,1],
 ];
 const MAP_W = map[0].length, MAP_H = map.length;
+const BLOCK_SIZE = 1.0; // world block unit
 
-// enemies (billboards)
-const enemies = [
-  {x:6.3, y:5.2, dir: Math.PI, color:[1.0, 0.6, 0.6]},
-  {x:2.6, y:6.8, dir: 0.7, color:[1.0, 0.8, 0.5]}
-];
-
-// ---------- Player ----------
-let px = 4.5, py = 4.5, pangle = 0;
+/* ===========================
+   Player & controls
+   =========================== */
+let px = 4.5, py = 4.5, pz = 0.6; // x,z position on grid (py used as z in earlier code; here use px, py)
+let yaw = 0; // rotation (radians)
 const keys = {};
 window.addEventListener('keydown', e=> keys[e.key]=true);
 window.addEventListener('keyup', e=> keys[e.key]=false);
 
-// ---------- GL setup ----------
-const big = document.getElementById('big');
-const gl = big.getContext('webgl', { antialias: false, depth: true });
+/* ===========================
+   Canvas + favicon
+   =========================== */
+const view = document.getElementById('view');
+const ctx = view.getContext('2d');
 
-if (!gl) {
-  alert('WebGL not available in this browser.');
+const favCanvas = document.createElement('canvas');
+favCanvas.width = 16; favCanvas.height = 16;
+const fctx = favCanvas.getContext('2d');
+
+/* ===========================
+   Colors / materials
+   =========================== */
+function colorFor(id){
+  if (id===1) return '#8d8d8d'; // stone
+  if (id===2) return '#9b6a3c'; // dirt
+  if (id===3) return '#4db63b'; // grass
+  return '#000';
+}
+function shadeHex(hex, factor){
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  const nr = Math.max(0,Math.min(255,Math.round(r*factor)));
+  const ng = Math.max(0,Math.min(255,Math.round(g*factor)));
+  const nb = Math.max(0,Math.min(255,Math.round(b*factor)));
+  return '#' + [nr,ng,nb].map(n=>n.toString(16).padStart(2,'0')).join('');
 }
 
-// simple helper
-function compileShader(src, type) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-    console.error(gl.getShaderInfoLog(s));
-    throw new Error('Shader compile failed');
+/* ===========================
+   Projection & camera helpers
+   =========================== */
+const W = view.width, H = view.height;
+const fov = Math.PI/3; // 60 deg
+const focal = (W/2) / Math.tan(fov/2);
+
+function worldToCamera(pxw, pyw, pzw, camX, camY, camZ, yaw){
+  // translate by camera
+  const dx = pxw - camX;
+  const dy = pyw - camY;
+  const dz = pzw - camZ;
+  // rotate Y (yaw)
+  const cos = Math.cos(-yaw);
+  const sin = Math.sin(-yaw);
+  const rx = dx * cos - dz * sin;
+  const rz = dx * sin + dz * cos;
+  return {x: rx, y: dy, z: rz}; // camera-space
+}
+function project(cam){
+  // perspective projection to 2D screen coords
+  // cam: {x,y,z} in camera space (z forward)
+  const z = Math.max(0.001, cam.z);
+  const sx = (cam.x * (focal / z)) + W/2;
+  const sy = (-cam.y * (focal / z)) + H/2;
+  return {x: sx, y: sy, z: z};
+}
+
+/* ===========================
+   Build faces to draw
+   ===========================
+   For each block we create polygons for the 6 faces
+   with their normals and average depth for painter's sort.
+   =========================== */
+function blockFaces(x, y, id){
+  // x,z grid to world coordinates: block spans [x,x+1] in x, y is height index (we'll keep single-layer ground at y=0..1)
+  // We'll place blocks at world coordinates (bx, by, bz) with by from 0..1 (single-layer)
+  const bx = x;
+  const bz = y;
+  const faces = [];
+  // cube corners (y=0..1)
+  const c = [
+    [bx, 0, bz],
+    [bx+1, 0, bz],
+    [bx+1, 1, bz],
+    [bx, 1, bz],
+    [bx, 0, bz+1],
+    [bx+1,0, bz+1],
+    [bx+1,1, bz+1],
+    [bx,1, bz+1]
+  ];
+  // faces: each face as list of corner indices + normal
+  const faceDefs = [
+    {idx:[0,1,2,3], normal:[0, -1, 0]}, // bottom (rarely visible)
+    {idx:[4,5,6,7], normal:[0, 1, 0]}, // top
+    {idx:[0,4,7,3], normal:[-1, 0, 0]}, // left (-x)
+    {idx:[1,5,6,2], normal:[1, 0, 0]}, // right (+x)
+    {idx:[0,1,5,4], normal:[0, 0, -1]}, // back (-z)
+    {idx:[3,2,6,7], normal:[0, 0, 1]} // front (+z)
+  ];
+  for (let f of faceDefs){
+    faces.push({
+      verts: f.idx.map(i=>({x:c[i][0], y:c[i][1], z:c[i][2]})),
+      normal: f.normal,
+      id: id
+    });
   }
-  return s;
-}
-function createProgram(vs, fs) {
-  const prog = gl.createProgram();
-  gl.attachShader(prog, compileShader(vs, gl.VERTEX_SHADER));
-  gl.attachShader(prog, compileShader(fs, gl.FRAGMENT_SHADER));
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.error(gl.getProgramInfoLog(prog));
-    throw new Error('Program link failed');
-  }
-  return prog;
+  return faces;
 }
 
-// ---------- Shaders ----------
-// Vertex: position, normal, uv, texIndex
-const vsSrc = `
-attribute vec3 aPos;
-attribute vec2 aUV;
-attribute float aTex;
-uniform mat4 uMV;
-uniform mat4 uP;
-varying vec2 vUV;
-varying float vTex;
-void main(){
-  vUV = aUV;
-  vTex = aTex;
-  gl_Position = uP * uMV * vec4(aPos, 1.0);
-}
-`;
-const fsSrc = `
-precision mediump float;
-varying vec2 vUV;
-varying float vTex;
-uniform sampler2D uTex;
-uniform vec3 uLight;
-void main(){
-  // vTex selects which 32x32 tile (we pack tiles horizontally)
-  float tileId = vTex;
-  // atlas: 3 tiles horizontally
-  vec2 atlasUV = vec2((vUV.x + tileId) / 3.0, vUV.y);
-  vec4 col = texture2D(uTex, atlasUV);
-  // simple lighting from front-top-right
-  vec3 light = normalize(uLight);
-  float ndotl = clamp(dot(vec3(0.0,0.0,1.0), light)*0.7 + 0.3, 0.2, 1.0);
-  gl_FragColor = vec4(col.rgb * ndotl, col.a);
-}
-`;
-
-// ---------- Program ----------
-const prog = createProgram(vsSrc, fsSrc);
-gl.useProgram(prog);
-
-// ---------- ATTR / UNIF locations ----------
-const aPosLoc = gl.getAttribLocation(prog, 'aPos');
-const aUVLoc  = gl.getAttribLocation(prog, 'aUV');
-const aTexLoc = gl.getAttribLocation(prog, 'aTex');
-const uMVLoc  = gl.getUniformLocation(prog, 'uMV');
-const uPLoc   = gl.getUniformLocation(prog, 'uP');
-const uTexLoc = gl.getUniformLocation(prog, 'uTex');
-const uLightLoc = gl.getUniformLocation(prog, 'uLight');
-
-// ---------- create simple texture atlas (3 tiles: stone,dirt,grass) ----------
-const atlas = document.createElement('canvas');
-atlas.width = 96; atlas.height = 32; // 3 tiles of 32x32
-const actx = atlas.getContext('2d');
-
-// draw stone tile
-function drawStone(ctx){
-  // base noisy gray
-  ctx.fillStyle = '#8d8d8d'; ctx.fillRect(0,0,32,32);
-  for (let i=0;i<200;i++){
-    ctx.fillStyle = `rgba(120,120,120,${Math.random()*0.15})`;
-    ctx.fillRect(Math.random()*32, Math.random()*32, Math.random()*3, Math.random()*3);
-  }
-}
-// draw dirt
-function drawDirt(ctx){
-  ctx.fillStyle = '#9b6a3c'; ctx.fillRect(0,0,32,32);
-  for (let i=0;i<100;i++){ ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(Math.random()*32, Math.random()*32, Math.random()*2, Math.random()*2); }
-}
-// draw grass (green top with dirt fringe)
-function drawGrass(ctx){
-  ctx.fillStyle = '#4db63b'; ctx.fillRect(0,0,32,20);
-  ctx.fillStyle = '#9b6a3c'; ctx.fillRect(0,20,32,12);
-  for (let i=0;i<120;i++){ ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(Math.random()*32, Math.random()*20, Math.random()*2, Math.random()*2); }
+/* ===========================
+   Visibility culling helpers
+   =========================== */
+function neighborSolid(ix, iz){
+  if (ix<0 || iz<0 || ix>=MAP_W || iz>=MAP_H) return true;
+  return map[iz][ix] !== 0;
 }
 
-// compose atlas
-drawStone( (function(){ const c=document.createElement('canvas').getContext('2d'); c.canvas.width=32; c.canvas.height=32; drawStone(c); actx.drawImage(c.canvas,0,0); return actx;} )() );
-drawDirt( (function(){ const c=document.createElement('canvas').getContext('2d'); c.canvas.width=32; c.canvas.height=32; drawDirt(c); actx.drawImage(c.canvas,32,0); return actx;} )() );
-drawGrass( (function(){ const c=document.createElement('canvas').getContext('2d'); c.canvas.width=32; c.canvas.height=32; drawGrass(c); actx.drawImage(c.canvas,64,0); return actx;} )() );
-
-// upload atlas to GL
-const tex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, tex);
-gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-gl.bindTexture(gl.TEXTURE_2D, null);
-
-// ---------- Build geometry: push visible faces as quads ----------
-let positions = [];
-let uvs = [];
-let texIndices = [];
-
-function pushFace(x,y,z, nx, ny, nz, tileIndex){
-  // face quad centered at block face; produce two triangles
-  // build in block-local coords (0..1)
-  // choose orientation by normal
-  const s = 1.0;
-  if (Math.abs(nx) === 1) {
-    // left/right faces (vary y,z)
-    const fx = x + (nx>0 ? 1 : 0);
-    const ys = [[y, z],[y+1, z],[y+1, z+1],[y, z+1]];
-    const pts = [
-      [fx, ys[0][0], ys[0][1]],
-      [fx, ys[1][0], ys[1][1]],
-      [fx, ys[2][0], ys[2][1]],
-      [fx, ys[3][0], ys[3][1]],
-    ];
-    // triangles
-    const order = [0,1,2, 0,2,3];
-    for (let idx of order){
-      positions.push(pts[idx][0], pts[idx][1], pts[idx][2]);
-      // uvs: map 0..1 across face
-      const u = (idx===0||idx===3)?0:1;
-      const v = (idx===0||idx===1)?1:0;
-      uvs.push(u,v);
-      texIndices.push(tileIndex);
-    }
-  } else if (Math.abs(ny) === 1) {
-    // top/bottom faces (vary x,z)
-    const fy = y + (ny>0 ? 1 : 0);
-    const xs = [[x, z],[x+1, z],[x+1, z+1],[x, z+1]];
-    const pts = [
-      [xs[0][0], fy, xs[0][1]],
-      [xs[1][0], fy, xs[1][1]],
-      [xs[2][0], fy, xs[2][1]],
-      [xs[3][0], fy, xs[3][1]],
-    ];
-    const order = [0,1,2, 0,2,3];
-    for (let idx of order){
-      positions.push(pts[idx][0], pts[idx][1], pts[idx][2]);
-      const u = (idx===0||idx===3)?0:1;
-      const v = (idx===0||idx===1)?1:0;
-      uvs.push(u,v);
-      texIndices.push(tileIndex);
-    }
-  } else {
-    // front/back faces (vary x,y)
-    const fz = z + (nz>0 ? 1 : 0);
-    const xs = [[x,y],[x+1,y],[x+1,y+1],[x,y+1]];
-    const pts = [
-      [xs[0][0], xs[0][1], fz],
-      [xs[1][0], xs[1][1], fz],
-      [xs[2][0], xs[2][1], fz],
-      [xs[3][0], xs[3][1], fz],
-    ];
-    const order = [0,1,2, 0,2,3];
-    for (let idx of order){
-      positions.push(pts[idx][0], pts[idx][1], pts[idx][2]);
-      const u = (idx===0||idx===3)?0:1;
-      const v = (idx===0||idx===1)?1:0;
-      uvs.push(u,v);
-      texIndices.push(tileIndex);
-    }
-  }
-}
-
-function buildGeometry() {
-  positions = []; uvs = []; texIndices = [];
-  for (let y=0;y<MAP_H;y++){
-    for (let x=0;x<MAP_W;x++){
-      const id = map[y][x];
+/* ===========================
+   Create list of visible faces each frame
+   =========================== */
+function gatherFaces(){
+  const camX = px, camY = pz, camZ = py; // note: using px,py for horizontal coords, pz for height
+  const faces = [];
+  for (let z=0; z<MAP_H; z++){
+    for (let x=0; x<MAP_W; x++){
+      const id = map[z][x];
       if (id === 0) continue;
-      // check each face; add face if neighbor is air/outside
-      const tileIndex = (id === 1 ? 0 : id === 2 ? 1 : 2);
-      // left (-x)
-      if (x-1 < 0 || map[y][x-1] === 0) pushFace(x,0,y, -1,0,0, tileIndex);
-      // right (+x)
-      if (x+1 >= MAP_W || map[y][x+1] === 0) pushFace(x,0,y, 1,0,0, tileIndex);
-      // back (-z) (we treat map y as z)
-      if (y-1 < 0 || map[y-1][x] === 0) pushFace(x,0,y, 0,0,-1, tileIndex);
-      // front (+z)
-      if (y+1 >= MAP_H || map[y+1][x] === 0) pushFace(x,0,y, 0,0,1, tileIndex);
-      // top (+y)
-      // add top face for visible cap (if needed)
-      pushFace(x,1,y, 0,1,0, tileIndex);
-      // bottom face usually not visible, skip to save polys
+      // only include faces that are adjacent to air (or outside)
+      // top: always keep (makes blocks visible)
+      // left if neighbor at x-1 is air
+      const farr = blockFaces(x,z,id);
+      // bottom skip to save
+      // check adjacency to decide which faces to push
+      // map coords: map[row=z][col=x]
+      const leftSolid = neighborSolid(x-1,z);
+      const rightSolid = neighborSolid(x+1,z);
+      const backSolid = neighborSolid(x,z-1);
+      const frontSolid = neighborSolid(x,z+1);
+
+      // index mapping in faceDefs:
+      // 0 bottom,1 top,2 left,3 right,4 back,5 front
+      if (!leftSolid) faces.push(farr[2]);
+      if (!rightSolid) faces.push(farr[3]);
+      if (!backSolid) faces.push(farr[4]);
+      if (!frontSolid) faces.push(farr[5]);
+      faces.push(farr[1]); // top always
     }
   }
+  return faces;
 }
-buildGeometry();
 
-// ---------- GL buffers ----------
-const posBuf = gl.createBuffer();
-const uvBuf  = gl.createBuffer();
-const texBuf = gl.createBuffer();
-
-function uploadGeometry(){
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(aPosLoc);
-  gl.vertexAttribPointer(aPosLoc, 3, gl.FLOAT, false, 0, 0);
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvs), gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(aUVLoc);
-  gl.vertexAttribPointer(aUVLoc, 2, gl.FLOAT, false, 0, 0);
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, texBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texIndices), gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(aTexLoc);
-  gl.vertexAttribPointer(aTexLoc, 1, gl.FLOAT, false, 0, 0);
-}
-uploadGeometry();
-
-// ---------- Simple camera / projection ----------
-function perspective(fovy, aspect, near, far){
-  const f = 1.0/Math.tan(fovy/2);
-  const nf = 1/(near - far);
-  return [
-    f/aspect,0,0,0,
-    0,f,0,0,
-    0,0,(far+near)*nf,-1,
-    0,0,(2*far*near)*nf,0
-  ];
-}
-function lookAt(px,py,pz, tx,ty,tz, ux,uy,uz){
-  const zx = px - tx, zy = py - ty, zz = pz - tz;
-  let len = Math.hypot(zx,zy,zz); if (len===0) return identity();
-  const zxN = zx/len, zyN=zy/len, zzN=zz/len;
-  const xx = uy*zzN - uz*zyN;
-  const xy = uz*zxN - ux*zzN;
-  const xz = ux*zyN - uy*zxN;
-  len = Math.hypot(xx,xy,xz); if (len===0) return identity();
-  const xxN=xx/len, xyN=xy/len, xzN=xz/len;
-  const yx = zyN*xzN - zzN*xyN;
-  const yy = zzN*xxN - zxN*xzN;
-  const yz = zxN*xyN - zyN*xxN;
-  return [
-    xxN,yx,zxN,0,
-    xyN,yy,zyN,0,
-    xzN,yz,zzN,0,
-    -(xxN*px + xyN*py + xzN*pz),
-    -(yx*px + yy*py + yz*pz),
-    -(zxN*px + zyN*py + zzN*pz),
-    1
-  ];
-}
-function identity(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
-
-// ---------- Draw helpers ----------
-gl.clearColor(0.02,0.03,0.04,1);
-gl.enable(gl.DEPTH_TEST);
-gl.enable(gl.CULL_FACE);
-gl.cullFace(gl.BACK);
-
-gl.activeTexture(gl.TEXTURE0);
-gl.bindTexture(gl.TEXTURE_2D, tex);
-gl.uniform1i(uTexLoc, 0);
-
-// ---------- Favicon tiny canvas ----------
-const fav = document.createElement('canvas');
-fav.width = 16; fav.height = 16;
-const f2d = fav.getContext('2d');
-
-// ---------- render loop ----------
-let last = performance.now();
-function renderFrame(t){
-  const now = performance.now();
-  const dt = Math.min(0.033, (now - last)/1000);
-  last = now;
-
-  // handle controls: rotation & movement with collision
-  if (keys['ArrowLeft']) pangle -= dt * 2.5;
-  if (keys['ArrowRight']) pangle += dt * 2.5;
-
-  let mvx = 0, mvy = 0;
-  const speed = 2.5 * dt;
-  if (keys['w']) { mvx += Math.cos(pangle) * speed; mvy += Math.sin(pangle) * speed; }
-  if (keys['s']) { mvx -= Math.cos(pangle) * speed; mvy -= Math.sin(pangle) * speed; }
-  if (keys['a']) { mvx += Math.sin(pangle) * speed; mvy -= Math.cos(pangle) * speed; }
-  if (keys['d']) { mvx -= Math.sin(pangle) * speed; mvy += Math.cos(pangle) * speed; }
-
-  // collision: test next pos
-  function isWall(x,y){
-    const xi = Math.floor(x), yi = Math.floor(y);
-    if (xi<0||yi<0||xi>=MAP_W||yi>=MAP_H) return true;
-    return map[yi][xi] !== 0;
-  }
-  let nx = px + mvx, ny = py;
-  if (!isWall(nx, ny)) px = nx;
-  nx = px; ny = py + mvy;
-  if (!isWall(nx, ny)) py = ny;
-
-  // update enemies
-  for (let e of enemies) {
-    // wander
-    if (Math.random() < 0.02) { e.dir += (Math.random()-0.5)*1.2; }
-    const evx = Math.cos(e.dir)*0.6*dt, evy = Math.sin(e.dir)*0.6*dt;
-    let ex = e.x + evx, ey = e.y + evy;
-    if (ex < 1 || ey < 1 || ex > MAP_W-1 || ey > MAP_H-1 || map[Math.floor(ey)][Math.floor(ex)] !== 0) {
-      e.dir += Math.PI * 0.6; // turn
-    } else { e.x = ex; e.y = ey; }
-  }
-
-  // build model-view matrix (camera)
-  const camHeight = 0.6;
-  const cx = px, cy = camHeight, cz = py;
-  const tx = px + Math.cos(pangle), ty = camHeight, tz = py + Math.sin(pangle);
-  const mv = lookAt(cx,cy,cz, tx,ty,tz, 0,1,0);
-
-  // projection
-  const aspect = big.width / big.height;
-  const p = perspective(Math.PI/3, aspect, 0.1, 100.0);
-
+/* ===========================
+   Render routine
+   =========================== */
+function render(){
   // clear
-  gl.viewport(0,0,big.width,big.height);
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,W,H);
+  fctx.fillStyle = '#000';
+  fctx.fillRect(0,0,16,16);
 
-  // set uniforms
-  gl.uniformMatrix4fv(uMVLoc, false, new Float32Array(mv));
-  gl.uniformMatrix4fv(uPLoc, false, new Float32Array(p));
-  gl.uniform3f(uLightLoc, 0.5, 0.8, 0.6);
+  // gather faces
+  const faces = gatherFaces();
+  const camX = px, camY = pz, camZ = py;
 
-  // draw blocks
-  uploadGeometry();
-  gl.drawArrays(gl.TRIANGLES, 0, positions.length/3);
-
-  // draw enemies as simple colored quads that always face camera
-  // We'll build a small temporary buffer per enemy and draw as triangles with the same shader,
-  // using a 1x1 white region of the atlas (we'll use tile index 0 but tint in fragment via vertex color not implemented),
-  // so instead we'll draw as colored rectangles in 2D overlay via a separate 2D canvas overlay approach:
-  // For simplicity, after WebGL draw, we will overlay sprites onto the big canvas 2D context.
-
-  // Read WebGL pixels into 2D canvas? Instead, use the displayed canvas to draw sprites on top using 2D context.
-  // We'll copy the WebGL canvas into a temporary 2D canvas, draw sprites, then blit back.
-
-  // get 2d copy
-  const tmp = document.createElement('canvas');
-  tmp.width = big.width; tmp.height = big.height;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(big, 0, 0);
-
-  // draw enemy sprites (billboard) on tctx
-  for (let e of enemies) {
-    // compute screen position by projecting 3D point
-    const dx = e.x - cx, dz = e.y - cz, dy = 0;
-    // transform by view matrix (approx)
-    // using basic camera space transform:
-    const rx = dx * Math.cos(-pangle) - dz * Math.sin(-pangle);
-    const rz = dx * Math.sin(-pangle) + dz * Math.cos(-pangle);
-    // perspective project: focal length
-    const f = 120;
-    if (rz > 0.2) {
-      const sx = Math.round(big.width/2 + (rx / rz) * f);
-      const sy = Math.round(big.height/2 - (dy - camHeight) / rz * f);
-      const size = Math.round(clamp( (f / rz) * 0.8, 4, 48));
-      tctx.fillStyle = `rgba(${Math.round(e.color[0]*255)},${Math.round(e.color[1]*255)},${Math.round(e.color[2]*255)},1.0)`;
-      tctx.fillRect(sx - size/2, sy - size, size, size);
-      // simple outline
-      tctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      tctx.strokeRect(sx - size/2, sy - size, size, size);
+  // convert faces to camera space and project, compute depth
+  const drawList = [];
+  for (let f of faces){
+    // compute face center for culling and depth
+    const cx = f.verts.reduce((s,v)=>s+v.x,0)/4;
+    const cy = f.verts.reduce((s,v)=>s+v.y,0)/4;
+    const cz = f.verts.reduce((s,v)=>s+v.z,0)/4;
+    // camera-space center
+    const ccam = worldToCamera(cx, cy, cz, camX, camY, camZ, yaw);
+    if (ccam.z <= 0.1) continue; // behind camera
+    // face normal in world coords and simple backface cull: only draw faces roughly facing camera
+    // compute camera vector from face center
+    const camVec = {x: camX - cx, y: camY - cy, z: camZ - cz};
+    // normal (we'll use given normal; since cube faces axis-aligned we can compute dot in world)
+    const n = f.normal;
+    const dot = n.x*camVec.x + n.y*camVec.y + n.z*camVec.z; // if positive, normal points away from camera; choose sign to draw facing camera
+    // For axis aligned and our camVec, draw faces where dot < 0 (normal faces toward camera)
+    if (dot >= 0) {
+      // still might be visible due to orientation; keep top always
+      if (!(n[1] === 1)) continue;
     }
+
+    // project corners
+    const proj = f.verts.map(v=>{
+      const cam = worldToCamera(v.x, v.y, v.z, camX, camY, camZ, yaw);
+      if (cam.z <= 0.001) return null;
+      const p = project(cam);
+      return p;
+    });
+    if (proj.some(p=>p===null)) continue;
+
+    // average depth (smaller z means closer? we use z)
+    const depth = proj.reduce((s,p)=>s+p.z,0)/proj.length;
+    drawList.push({proj, depth, id: f.id, normal: f.normal});
   }
 
-  // put composed image back to main canvas
-  const main2d = big.getContext('2d');
-  main2d.clearRect(0,0,big.width,big.height);
-  main2d.drawImage(tmp, 0, 0);
+  // painter's: sort by far->near
+  drawList.sort((a,b)=>b.depth - a.depth);
 
-  // now create favicon out of a scaled-down copy (we scale main canvas to 16x16)
-  f2d.clearRect(0,0,16,16);
-  // draw tmp scaled into 16x16
-  f2d.imageSmoothingEnabled = false;
-  f2d.drawImage(tmp, 0, 0, 16, 16);
+  // light direction (simple)
+  const light = {x: 0.5, y: 0.8, z: -0.3};
+  const llen = Math.hypot(light.x,light.y,light.z);
+  light.x/=llen; light.y/=llen; light.z/=llen;
 
-  // set favicon
-  document.getElementById('favicon').href = fav.toDataURL('image/png');
+  // draw polygons
+  for (let item of drawList){
+    const p = item.proj;
+    // shading based on face normal
+    const normal = item.normal;
+    // normal as vector
+    const nx = normal[0], ny = normal[1], nz = normal[2];
+    const ndot = clamp(nx*light.x + ny*light.y + nz*light.z, -1, 1);
+    const shade = 0.5 + (ndot+1)/4; // range ~[0.25..1.0]
+    const base = colorFor(item.id);
+    const fill = shadeHex(base, shade);
 
-  requestAnimationFrame(renderFrame);
+    ctx.beginPath();
+    ctx.moveTo(p[0].x, p[0].y);
+    for (let i=1;i<p.length;i++) ctx.lineTo(p[i].x, p[i].y);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    // outline
+    ctx.strokeStyle = shadeHex('#000000', 0.8);
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+
+    // also draw scaled down to favicon (quick approximate)
+    fctx.beginPath();
+    fctx.moveTo(p[0].x * (16/W), p[0].y * (16/H));
+    for (let i=1;i<p.length;i++) fctx.lineTo(p[i].x * (16/W), p[i].y * (16/H));
+    fctx.closePath();
+    fctx.fillStyle = fill;
+    fctx.fill();
+  }
+
+  // HUD: center reticle on big canvas
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W/2 - 6, H/2); ctx.lineTo(W/2 + 6, H/2);
+  ctx.moveTo(W/2, H/2 - 6); ctx.lineTo(W/2, H/2 + 6);
+  ctx.stroke();
+
+  // set favicon from favCanvas
+  document.getElementById('favicon').href = favCanvas.toDataURL('image/png');
 }
-requestAnimationFrame(renderFrame);
 
-// ---------- Utility functions ----------
+/* ===========================
+   Movement + collision
+   =========================== */
+function isSolid(x,z){
+  const xi = Math.floor(x), zi = Math.floor(z);
+  if (xi < 0 || zi < 0 || xi >= MAP_W || zi >= MAP_H) return true;
+  return map[zi][xi] !== 0;
+}
+
+function movementLoop(){
+  // rotation
+  if (keys['ArrowLeft']) yaw -= 0.06;
+  if (keys['ArrowRight']) yaw += 0.06;
+
+  // movement local vector
+  let mx=0, mz=0;
+  const speed = 0.06;
+  if (keys['w']) { mx += Math.cos(yaw) * speed; mz += Math.sin(yaw) * speed; }
+  if (keys['s']) { mx -= Math.cos(yaw) * speed; mz -= Math.sin(yaw) * speed; }
+  if (keys['a']) { mx += Math.sin(yaw) * speed; mz -= Math.cos(yaw) * speed; }
+  if (keys['d']) { mx -= Math.sin(yaw) * speed; mz += Math.cos(yaw) * speed; }
+
+  // attempt move with axis separation
+  let nx = px + mx, nz = py;
+  if (!isSolid(nx, nz)) px = nx;
+  nx = px; nz = py + mz;
+  if (!isSolid(nx, nz)) py = nz;
+
+  requestAnimationFrame(movementLoop);
+}
+
+/* ===========================
+   Spawn safety: ensure player starts in air above solid
+   =========================== */
+function findSpawn(){
+  for (let z=0; z<MAP_H; z++){
+    for (let x=0; x<MAP_W; x++){
+      // find topmost solid in column and spawn above it in nearby air
+      if (map[z][x] !== 0){
+        // check above coords for free 1x1 area
+        const sx = x + 0.5, sz = z + 0.5;
+        // spawn at first adjacent air cell if available
+        const checks = [
+          [sx+1, sz], [sx-1, sz], [sx, sz+1], [sx, sz-1], [sx+1, sz+1], [sx-1, sz-1]
+        ];
+        for (let [cx,cz] of checks){
+          const xi = Math.floor(cx), zi = Math.floor(cz);
+          if (xi >=0 && zi >=0 && xi<MAP_W && zi<MAP_H && map[zi][xi] === 0){
+            return {x: cx, z: cz};
+          }
+        }
+      }
+    }
+  }
+  return {x:1.5, z:1.5};
+}
+const spawn = findSpawn();
+px = spawn.x; py = spawn.z;
+
+/* ===========================
+   Main loop
+   =========================== */
+function frame(){
+  render();
+  requestAnimationFrame(frame);
+}
+movementLoop();
+frame();
+
+/* ===========================
+   Utility
+   =========================== */
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
 </script>
