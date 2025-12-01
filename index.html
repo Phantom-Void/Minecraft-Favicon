@@ -224,17 +224,7 @@ if (vy <= 0) {
     }
 }
 
-   else {
-    // moving upward: if head collides, zero vy and keep py (don't push down/up)
-    if(collidesAt(px, newY + PH - 0.001, pz)){
-      vy = 0;
-      // keep py unchanged (prevents phasing into ceiling and then bounce)
-    } else {
-      py = newY;
-      grounded = false;
-    }
-  }
-}
+
 
 /* ---------- 3D DDA Voxel Raycast (correct implementation) ---------- */
 function castRay(origin, dir, maxDist=40){
