@@ -1,416 +1,181 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Voxel — Fixed Camera Only</title>
-<link id="favicon" rel="icon" href="">
+<meta charset="utf-8">
+<title>Voxel — Minecraft Camera</title>
 <style>
-  :root{--bg:#071018;--muted:#9fb7c9}
-  html,body{height:100%;margin:0;background:var(--bg);color:#e6f3fb;font-family:Inter,Arial,Helvetica,sans-serif}
-  .wrap{display:flex;flex-direction:column;align-items:center;padding:12px}
-  h1{margin:6px 0 10px 0}
-  canvas#view{width:640px;height:426px;border:4px solid #0f2130; image-rendering: pixelated; background:#000; display:block}
-  .hint{color:var(--muted);margin-top:8px;font-size:13px;text-align:center}
+    body {
+        background:#0b1118;
+        color:white;
+        text-align:center;
+        font-family:Arial, sans-serif;
+    }
+    canvas {
+        background:#000;
+        margin-top:20px;
+        border:4px solid #1e2a35;
+        border-radius:8px;
+    }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Voxel — Fixed Camera Only</h1>
-    <canvas id="view" width="240" height="160"></canvas>
-    <div class="hint">WASD move • Mouse look (click canvas) • Space jump • LMB mine • I = inv title • H = health title</div>
-  </div>
+
+<h1>Voxel — Minecraft Camera (No Roll)</h1>
+<canvas id="game" width="640" height="480"></canvas>
+
+<p>WASD move • Mouse = look • Space = jump • LMB mine</p>
 
 <script>
-/* Voxel engine — original visuals; camera fixed (no roll / no flip) */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.requestPointerLock =
+    canvas.requestPointerLock ||
+    canvas.mozRequestPointerLock;
 
-/* CONFIG */
-const W = 64, D = 64, H = 64;
-const CANVAS_W = 240, CANVAS_H = 160;
-const FOV = Math.PI/3;
-const REACH = 6;
-const FAV = 16;
-const MAX_RENDER_DIST = 48;
+canvas.onclick = () => canvas.requestPointerLock();
 
-/* blocks */
-const AIR=0, STONE=1, DIRT=2, GRASS=3, LOG=4, LEAF=5;
+// ------------------------
+// Camera
+// ------------------------
+let camX = 8, camY = 10, camZ = 8;
+let yaw = 0;
+let pitch = 0;
+const worldUp = {x:0, y:1, z:0};
 
-/* storage */
-const blocks = new Uint8Array(W*H*D);
-function idx(x,y,z){ return ((y*D)+z)*W + x; }
-function inBounds(x,y,z){ return x>=0&&y>=0&&z>=0&&x<W&&y<H&&z<D; }
-function getBlock(x,y,z){ if(!inBounds(x,y,z)) return AIR; return blocks[idx(x,y,z)]; }
-function setBlock(x,y,z,v){ if(!inBounds(x,y,z)) return; blocks[idx(x,y,z)] = v; }
+// Movement state
+let keys = {};
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
 
-/* noise + world gen (kept from your original visuals) */
-function pseudo(i){ i=(i<<13)^i; return 1.0 - ((i*(i*i*15731+789221)+1376312589)&0x7fffffff)/1073741824.0; }
-function smooth2(x,y){
-  const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
-  const v00=pseudo(xi+yi*57), v10=pseudo(xi+1+yi*57), v01=pseudo(xi+(yi+1)*57), v11=pseudo(xi+1+(yi+1)*57);
-  const u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
-  const a=v00*(1-u)+v10*u, b=v01*(1-u)+v11*u;
-  return a*(1-v)+b*v;
-}
-function fractal2(x,y,oct=4,scale=1){ let amp=1,freq=1,sum=0,norm=0; for(let i=0;i<oct;i++){ sum+=smooth2(x*freq/scale,y*freq/scale)*amp; norm+=amp; amp*=0.5; freq*=2;} return sum/norm; }
-function fractal3(x,y,z){ return (fractal2(x,y,3,24)+fractal2(y,z,3,24)+fractal2(x,z,3,24))/3; }
+document.addEventListener("mousemove", e => {
+    if (document.pointerLockElement !== canvas) return;
 
-function genWorld(){
-  blocks.fill(AIR);
-  for(let z=0;z<D;z++){
-    for(let x=0;x<W;x++){
-      let n = fractal2(x*0.6,z*0.6,5,32)*6 + fractal2(x*0.08,z*0.08,3,1)*10;
-      const centerBias=(1 - Math.hypot(x/W-0.5,z/D-0.5)/0.7071)*3.5;
-      n+=centerBias;
-      let h=Math.floor(H/4 + n);
-      h = Math.max(2, Math.min(H-6,h));
-      for(let y=0;y<=h;y++){
-        if(y<h-3) setBlock(x,y,z,STONE);
-        else if(y<h-1) setBlock(x,y,z,DIRT);
-        else setBlock(x,y,z,GRASS);
-      }
-    }
-  }
-  // caves
-  for(let z=2;z<D-2;z++) for(let x=2;x<W-2;x++) for(let y=2;y<H-6;y++){
-    const n = fractal3(x*0.12,y*0.12,z*0.12);
-    const thr = 0.22 + (y/H)*0.4;
-    if(n>thr) setBlock(x,y,z,AIR);
-  }
-  // trees
-  for(let z=2;z<D-2;z++) for(let x=2;x<W-2;x++){
-    if(Math.random()<0.007){
-      for(let y=H-2;y>1;y--){
-        if(getBlock(x,y,z)===GRASS){
-          const h=3+Math.floor(Math.random()*2);
-          let ok=true;
-          for(let yy=y+1;yy<=y+h+2;yy++) for(let lx=-2;lx<=2;lx++) for(let lz=-2;lz<=2;lz++){
-            if(getBlock(x+lx,yy,z+lz)!==AIR) ok=false;
-          }
-          if(!ok) break;
-          for(let t=1;t<=h;t++) setBlock(x,y+t,z,LOG);
-          for(let lx=-2;lx<=2;lx++) for(let lz=-2;lz<=2;lz++) for(let ly=h-1;ly<=h+1;ly++){
-            const ax=x+lx, ay=y+ly+1, az=z+lz;
-            if(Math.abs(lx)+Math.abs(lz)+Math.abs(ly) <=4 && getBlock(ax,ay,az)===AIR) setBlock(ax,ay,az,LEAF);
-          }
-          break;
-        }
-      }
-    }
-  }
-}
-genWorld();
+    yaw -= e.movementX * 0.0028;
+    pitch -= e.movementY * 0.0028;
 
-/* ---------- SAFE SPAWN (avoid thin cave roofs) ---------- */
-let px=4.5, py=20.0, pz=4.5;
-(function findSpawn(){
-  outer:
-  for(let z=2; z<D-2; z++){
-    for(let x=2; x<W-2; x++){
-      for(let y=H-8; y>=4; y--){
-        const here = getBlock(x, y, z);
-        const above = getBlock(x, y+1, z);
-        const below = getBlock(x, y-1, z);
-        if(here !== AIR || above !== AIR) continue;
-        if(below === AIR) continue;
-        if(getBlock(x, y-2, z) === AIR) continue;
-        if(getBlock(x, y-3, z) === AIR) continue;
-        px = x + 0.5;
-        py = y + 0.01;
-        pz = z + 0.5;
-        break outer;
-      }
-    }
-  }
-})();
-
-/* ---------- PLAYER ---------- */
-let vy=0; let grounded=false;
-const PR = 0.25, PH = 1.6;
-
-/* camera orientation */
-let yaw=0, pitch=0; // we will use spherical forward, right from yaw-only; up = cross(right, forward)
-
-/* ---------- CANVAS & FAV ---------- */
-const canvas = document.getElementById('view'), ctx = canvas.getContext('2d');
-const fav = document.createElement('canvas'); fav.width = FAV; fav.height = FAV; const fctx = fav.getContext('2d');
-canvas.style.cursor = 'crosshair';
-
-/* ---------- INPUT ---------- */
-const keys = {};
-let showInv=false, showHealth=false; let health=20;
-const inventory = {};
-window.addEventListener('keydown', e=>{ keys[e.key]=true; if(e.key==='i'||e.key==='I'){ showInv=!showInv; updateTitle(); } if(e.key==='h'||e.key==='H'){ showHealth=!showHealth; updateTitle(); }});
-window.addEventListener('keyup', e=> keys[e.key]=false);
-canvas.addEventListener('click', ()=> canvas.requestPointerLock && canvas.requestPointerLock());
-
-/* ---------- CRITICAL CAMERA FIX: no roll, no flip ---------- */
-window.addEventListener('mousemove', e=>{
-  if(document.pointerLockElement !== canvas) return;
-  // update yaw and pitch from mouse movement
-  yaw -= e.movementX * 0.0024;
-  pitch -= e.movementY * 0.0024;
-  // clamp pitch to avoid flipping; keep a tiny epsilon
-  const P_LIMIT = Math.PI/2 - 0.001;
-  if(pitch > P_LIMIT) pitch = P_LIMIT;
-  if(pitch < -P_LIMIT) pitch = -P_LIMIT;
+    // Clamp pitch to avoid camera flipping and roll
+    const limit = Math.PI/2 - 0.01;
+    pitch = Math.max(-limit, Math.min(limit, pitch));
 });
 
-// title/inventory helpers
-function addToInv(id){ inventory[id]=(inventory[id]||0)+1; updateTitle(); }
-function blockName(id){ switch(id){ case STONE:return'stone'; case DIRT:return'dirt'; case GRASS:return'grass'; case LOG:return'wood'; case LEAF:return'leaf'; default: return'air'; } }
-function updateTitle(){ const parts=[]; if(showInv){ const p=Object.keys(inventory).map(k=>`${blockName(Number(k))} x${inventory[k]}`).join(', '); parts.push('Inv: '+(p||'empty')); } if(showHealth) parts.push(`Health: ${health}`); document.title = parts.length?parts.join(' | '):'Voxel — Fixed Camera Only'; }
+// --------------------------------------------
+// Block world (simple voxel test world)
+// --------------------------------------------
+const world = {};
+function set(x,y,z,val){ world[`${x},${y},${z}`]=val; }
+function get(x,y,z){ return world[`${x},${y},${z}`]; }
 
-/* ---------- COLLISION: capsule AABB ---------- */
-function collidesAt(x,y,z){
-  const minX = Math.floor(x - PR), maxX = Math.floor(x + PR);
-  const minZ = Math.floor(z - PR), maxZ = Math.floor(z + PR);
-  const minY = Math.floor(y + 0.001), maxY = Math.floor(y + PH - 0.001);
-  for(let bx=minX; bx<=maxX; bx++){
-    for(let bz=minZ; bz<=maxZ; bz++){
-      for(let by=minY; by<=maxY; by++){
-        if(getBlock(bx,by,bz)!==AIR) return true;
-      }
-    }
-  }
-  return false;
-}
-
-/* ---------- MOVEMENT (keeps original feel) ---------- */
-function movementStep(dt){
-  // fallback arrow rotation
-  if(document.pointerLockElement !== canvas){
-    if(keys['ArrowLeft']) yaw -= 0.04;
-    if(keys['ArrowRight']) yaw += 0.04;
-    if(keys['ArrowUp']) pitch = Math.max(-1.35, pitch - 0.04);
-    if(keys['ArrowDown']) pitch = Math.min(1.35, pitch + 0.04);
-  }
-
-  const speed = keys['Shift'] ? 0.16 : 0.09;
-  let dx=0,dz=0;
-  if(keys['w']||keys['W']) { dx += Math.cos(yaw)*speed; dz += Math.sin(yaw)*speed; }
-  if(keys['s']||keys['S']) { dx -= Math.cos(yaw)*speed; dz -= Math.sin(yaw)*speed; }
-  if(keys['a']||keys['A']) { dx += Math.sin(yaw)*speed; dz -= Math.cos(yaw)*speed; }
-  if(keys['d']||keys['D']) { dx -= Math.sin(yaw)*speed; dz += Math.cos(yaw)*speed; }
-
-  // horizontal collision per-axis
-  const nx = px + dx;
-  if(!collidesAt(nx, py, pz)) px = nx;
-  const nz = pz + dz;
-  if(!collidesAt(px, py, nz)) pz = nz;
-
-  // gravity & jump
-  const GRAV = -9.8;
-  vy += GRAV * dt;
-  if((keys[' ']||keys['Space']) && grounded){
-    vy = 5.2; grounded = false;
-  }
-
-  // integrate vertical
-  const newY = py + vy * dt;
-
-  if (vy <= 0) {
-    if(!collidesAt(px, newY, pz)){
-      py = newY;
-      grounded = false;
-    } else {
-      // snap to top of block we collide with
-      py = Math.floor(newY) + 1;
-      vy = 0;
-      grounded = true;
-    }
-  } else {
-    if(collidesAt(px, newY + PH - 0.001, pz)){
-      vy = 0;
-    } else {
-      py = newY;
-      grounded = false;
-    }
-  }
-}
-
-/* ---------- 3D DDA Voxel Raycast (returns normal) ---------- */
-function castRay(origin, dir, maxDist=MAX_RENDER_DIST){
-  let ox=origin.x, oy=origin.y, oz=origin.z;
-  let vx=Math.floor(ox), vyv=Math.floor(oy), vz=Math.floor(oz);
-
-  const stepX = dir.x > 0 ? 1 : -1;
-  const stepY = dir.y > 0 ? 1 : -1;
-  const stepZ = dir.z > 0 ? 1 : -1;
-
-  const tDeltaX = dir.x===0 ? Infinity : Math.abs(1/dir.x);
-  const tDeltaY = dir.y===0 ? Infinity : Math.abs(1/dir.y);
-  const tDeltaZ = dir.z===0 ? Infinity : Math.abs(1/dir.z);
-
-  let tMaxX = dir.x===0 ? Infinity : ((stepX>0 ? (vx+1-ox) : (ox-vx)) / Math.abs(dir.x));
-  let tMaxY = dir.y===0 ? Infinity : ((stepY>0 ? (vyv+1-oy) : (oy-vyv)) / Math.abs(dir.y));
-  let tMaxZ = dir.z===0 ? Infinity : ((stepZ>0 ? (vz+1-oz) : (oz-vz)) / Math.abs(dir.z));
-
-  let t = 0;
-  const maxT = maxDist / Math.max(1e-6, Math.hypot(dir.x,dir.y,dir.z));
-
-  // if origin is inside block
-  if(getBlock(vx,vyv,vz)!==AIR) return { x:vx,y:vyv,z:vz,block:getBlock(vx,vyv,vz),dist:0,normal:{x:0,y:0,z:0} };
-
-  let lastStep = null;
-  while(t <= maxT){
-    if(vx<0||vyv<0||vz<0||vx>=W||vyv>=H||vz>=D) break;
-    const b = getBlock(vx,vyv,vz);
-    if(b!==AIR){
-      let normal = {x:0,y:0,z:0};
-      if(lastStep){
-        if(lastStep.axis==='x') normal.x = -lastStep.sign;
-        if(lastStep.axis==='y') normal.y = -lastStep.sign;
-        if(lastStep.axis==='z') normal.z = -lastStep.sign;
-      }
-      return {x:vx,y:vyv,z:vz,block:b,dist:t,normal:normal};
-    }
-    if(tMaxX <= tMaxY && tMaxX <= tMaxZ){
-      vx += stepX; t = tMaxX; tMaxX += tDeltaX; lastStep = {axis:'x', sign:stepX};
-    } else if(tMaxY <= tMaxX && tMaxY <= tMaxZ){
-      vyv += stepY; t = tMaxY; tMaxY += tDeltaY; lastStep = {axis:'y', sign:stepY};
-    } else {
-      vz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; lastStep = {axis:'z', sign:stepZ};
-    }
-  }
-  return null;
-}
-
-/* ---------- CAMERA RAY DIRECTION (FIXED) ----------
-   Build forward from pitch/yaw (spherical).
-   Build right from yaw-only. up = cross(right, forward).
-   This guarantees no roll and no flipping.
-*/
-function cameraRayDir(pixelX, pixelY, canvasW=CANVAS_W, canvasH=CANVAS_H){
-  // NDC
-  const nx = (pixelX - canvasW/2) / (canvasW/2); // -1..1
-  const ny = (canvasH/2 - pixelY) / (canvasH/2); // -1..1 (y up)
-  const sx = Math.tan(FOV/2) * nx;
-  const sy = Math.tan(FOV/2) * ny;
-
-  // forward (spherical) - NOTE order: cos(pitch)*cos(yaw) etc.
-  const cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const cy = Math.cos(yaw), syaw = Math.sin(yaw);
-  const forward = { x: cp * cy, y: sp, z: cp * syaw };
-
-  // right: only depends on yaw (keeps camera upright)
-  const right = { x: Math.sin(yaw - Math.PI/2), y: 0, z: Math.cos(yaw - Math.PI/2) };
-
-  // up = cross(right, forward)
-  const up = {
-    x: right.y * forward.z - right.z * forward.y,
-    y: right.z * forward.x - right.x * forward.z,
-    z: right.x * forward.y - right.y * forward.x
-  };
-
-  // combine and normalize
-  let dir = {
-    x: forward.x + right.x * sx + up.x * sy,
-    y: forward.y + right.y * sx + up.y * sy,
-    z: forward.z + right.z * sx + up.z * sy
-  };
-  const L = Math.hypot(dir.x, dir.y, dir.z) || 1;
-  dir.x/=L; dir.y/=L; dir.z/=L;
-  return dir;
-}
-
-/* ---------- RENDER ---------- */
-const canvasImg = ctx.createImageData(CANVAS_W, CANVAS_H);
-function baseColor(id){
-  switch(id){
-    case STONE: return [141,141,141];
-    case DIRT: return [155,106,60];
-    case GRASS: return [77,182,59];
-    case LOG: return [107,63,36];
-    case LEAF: return [47,160,74];
-    default: return [0,0,0];
-  }
-}
-function dot(a,b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
-function normalize(v){ const L=Math.hypot(v.x||0,v.y||0,v.z||0)||1; return {x:v.x/L,y:v.y/L,z:v.z/L}; }
-
-function renderFrame(){
-  const buf = canvasImg.data;
-  const eye = { x: px, y: py + 0.5, z: pz }; // eye a bit above feet
-  const maxDist = MAX_RENDER_DIST;
-  const lightDir = normalize({x:0.7,y:0.6,z:0.3});
-
-  for(let j=0;j<CANVAS_H;j++){
-    for(let i=0;i<CANVAS_W;i++){
-      const dir = cameraRayDir(i+0.5,j+0.5);
-      const hit = castRay(eye, dir, maxDist);
-      const o = (j*CANVAS_W + i)*4;
-      if(hit){
-        const col = baseColor(hit.block);
-        let nl = 0.5;
-        if(hit.normal){
-          const nn = normalize(hit.normal);
-          nl += Math.max(0, dot(nn, lightDir)) * 0.8;
+// Generate simple terrain
+for (let x=0;x<32;x++){
+    for (let z=0;z<32;z++){
+        let h = 8 + Math.floor(Math.sin(x*0.3)+Math.cos(z*0.3)*1.5);
+        for (let y=0;y<h;y++){
+            set(x,y,z,1);
         }
-        const shade = Math.max(0.22, nl * (1 - hit.dist/(maxDist*0.9)));
-        buf[o] = Math.round(col[0]*shade);
-        buf[o+1] = Math.round(col[1]*shade);
-        buf[o+2] = Math.round(col[2]*shade);
-        buf[o+3] = 255;
-      } else {
-        const t = 1 - (j / CANVAS_H);
-        buf[o] = Math.round(20 + 140 * t);
-        buf[o+1] = Math.round(30 + 120 * t);
-        buf[o+2] = Math.round(40 + 90 * t);
-        buf[o+3] = 255;
-      }
     }
-  }
-  ctx.putImageData(canvasImg,0,0);
-
-  // HUD
-  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(6,6,200,34);
-  ctx.fillStyle='#fff'; ctx.font='10px monospace';
-  ctx.fillText(`Health: ${health}`, 12, 18);
-  const invParts = Object.keys(inventory).map(k=> `${blockName(Number(k))}:${inventory[k]}`).slice(0,6).join(' ');
-  ctx.fillText(`Inv: ${invParts||'empty'}`,12,34);
-
-  // crosshair
-  ctx.strokeStyle='rgba(255,255,255,0.7)';
-  ctx.beginPath(); ctx.moveTo(CANVAS_W/2-6, CANVAS_H/2); ctx.lineTo(CANVAS_W/2+6, CANVAS_H/2);
-  ctx.moveTo(CANVAS_W/2, CANVAS_H/2-6); ctx.lineTo(CANVAS_W/2, CANVAS_H/2+6); ctx.stroke();
-
-  // favicon
-  fctx.imageSmoothingEnabled = false; fctx.clearRect(0,0,FAV,FAV);
-  fctx.drawImage(canvas,0,0,FAV,FAV);
-  document.getElementById('favicon').href = fav.toDataURL('image/png');
 }
 
-/* ---------- MINING ---------- */
-function mineCenter(){
-  const eye = { x: px, y: py + 0.5, z: pz };
-  const dir = cameraRayDir(CANVAS_W/2, CANVAS_H/2);
-  const hit = castRay(eye, dir, REACH);
-  if(!hit) return;
-  const id = getBlock(hit.x, hit.y, hit.z);
-  if(id===AIR) return;
-  addToInv(id);
-  setBlock(hit.x, hit.y, hit.z, AIR);
+// --------------------------------------------
+// Math helpers
+// --------------------------------------------
+function normalize(v){
+    const l = Math.hypot(v.x, v.y, v.z);
+    if (l === 0) return {x:0,y:0,z:0};
+    return {x:v.x/l, y:v.y/l, z:v.z/l};
 }
-window.addEventListener('mousedown', e=>{ if(e.button===0) mineCenter(); });
-
-/* ---------- MAIN LOOP ---------- */
-let last=performance.now();
-function loop(){
-  const now=performance.now();
-  const dt=Math.min(0.05,(now-last)/1000);
-  last=now;
-
-  movementStep(dt);
-  renderFrame();
-
-  requestAnimationFrame(loop);
+function cross(a,b){
+    return {
+        x: a.y*b.z - a.z*b.y,
+        y: a.z*b.x - a.x*b.z,
+        z: a.x*b.y - a.y*b.x
+    };
 }
-requestAnimationFrame(loop);
 
-/* ---------- convenience globals for dev ---------- */
-window.vox = { getBlock, setBlock, blocks, player:()=>({x:px,y:py,z:pz,yaw,pitch}) };
+// --------------------------------------------
+// Render loop
+// --------------------------------------------
+function updateMovement(){
+    // Compute forward direction from yaw/pitch
+    const forward = {
+        x: Math.cos(pitch)*Math.cos(yaw),
+        y: Math.sin(pitch),
+        z: Math.cos(pitch)*Math.sin(yaw)
+    };
 
-/* ---------- DONE ---------- */
+    // Right = forward × worldUp
+    let right = cross(worldUp, forward);
+    right = normalize(right);
+
+    // Correct forward to be horizontal for WASD
+    const forwardFlat = normalize({x:forward.x, y:0, z:forward.z});
+
+    const speed = 0.12;
+
+    if (keys["w"]) { camX += forwardFlat.x * speed; camZ += forwardFlat.z * speed; }
+    if (keys["s"]) { camX -= forwardFlat.x * speed; camZ -= forwardFlat.z * speed; }
+    if (keys["a"]) { camX -= right.x * speed; camZ -= right.z * speed; }
+    if (keys["d"]) { camX += right.x * speed; camZ += right.z * speed; }
+    if (keys[" "]) camY += speed;
+}
+
+function draw(){
+    updateMovement();
+
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Camera direction vector
+    const dir = {
+        x: Math.cos(pitch)*Math.cos(yaw),
+        y: Math.sin(pitch),
+        z: Math.cos(pitch)*Math.sin(yaw)
+    };
+
+    // Very simple raymarch voxel render
+    const fov = 70 * (Math.PI/180);
+    const halfW = canvas.width/2;
+    const halfH = canvas.height/2;
+
+    for (let y=0;y<canvas.height;y++){
+        for (let x=0;x<canvas.width;x++){
+
+            let rx = (x - halfW) / halfW;
+            let ry = (y - halfH) / halfH;
+
+            // Apply FOV
+            let rdx = dir.x + rx*Math.cos(yaw);
+            let rdy = dir.y + ry;
+            let rdz = dir.z + rx*Math.sin(yaw);
+
+            let len = Math.hypot(rdx,rdy,rdz);
+            rdx/=len; rdy/=len; rdz/=len;
+
+            let sx = camX;
+            let sy = camY;
+            let sz = camZ;
+
+            for (let t=0; t<40; t++){
+                sx += rdx*0.5;
+                sy += rdy*0.5;
+                sz += rdz*0.5;
+
+                let bx = Math.floor(sx);
+                let by = Math.floor(sy);
+                let bz = Math.floor(sz);
+
+                if (get(bx,by,bz)){
+                    ctx.fillStyle = `rgb(${50+by*10},${120+by*5},${50})`;
+                    ctx.fillRect(x,y,1,1);
+                    break;
+                }
+            }
+        }
+    }
+
+    requestAnimationFrame(draw);
+}
+
+draw();
 </script>
 </body>
 </html>
