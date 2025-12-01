@@ -1,0 +1,22 @@
+<link id="favicon" rel="icon" href="">
+<script>
+const canvas = document.createElement("canvas");
+canvas.width = 16;
+canvas.height = 16;
+const ctx = canvas.getContext("2d");
+
+let angle = 0;
+function updateFavicon() {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, 16, 16);
+
+  ctx.fillStyle = "lime";
+  ctx.fillRect(5 + Math.sin(angle)*3, 5, 6, 6);
+
+  angle += 0.2;
+
+  document.querySelector("#favicon").href = canvas.toDataURL("image/png");
+  requestAnimationFrame(updateFavicon);
+}
+updateFavicon();
+</script>
