@@ -26,13 +26,8 @@
 
 <script>
 /* ============================
-  Raycast heightmap world — full file
-  - 64x64 heightmap with grass/dirt/stone
-  - trees placed as sprites
-  - caves carved by tunnels (setting lower heights)
-  - mining lowers column height and adds to inventory
-  - movement with step limit (can't move to tile with too-large height diff)
-  - mouse & arrow look, jump, favicon mirror
+  Raycast heightmap world — fixed & working
+  - Fixes: duplicate var removal, persistent eye offset, proper jump/landing, integrated camera bob
   ============================ */
 
 /* CONFIG */
@@ -158,7 +153,8 @@ findSpawn();
 
 /* player movement & camera */
 let yaw=0, pitch=0;         // yaw yaw, pitch up/down
-let velY = 0, onGround=true;
+let velY = 0, onGround = true;   // KEEP single declaration
+let playerEyeOffset = 0;    // persistent eye offset for jump/bob
 let keys = {};
 window.addEventListener('keydown', e=>{ keys[e.key]=true; if (e.key==='i'||e.key==='I'){ showInv=!showInv; updateTitle(); } if (e.key==='h'||e.key==='H'){ showHealth=!showHealth; updateTitle(); }});
 window.addEventListener('keyup', e=> keys[e.key]=false);
@@ -307,10 +303,9 @@ function render(){
     // top height of column
     const colH = HEIGHT[hit.mapZ][hit.mapX];
     const topWorldY = colH; // world units
-    const playerWorldY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE; // player's eye y
+    const playerWorldY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE + playerEyeOffset; // player's eye y (with offset)
 
     // compute apparent height on screen: the taller the column above player's eye, the larger slice
-    // we use simple perspective formula: apparent_size = scale * (topWorldY - (playerWorldY - PLAYER_EYE)) / dist
     const heightWorld = Math.max(0.01, topWorldY - (playerWorldY - PLAYER_EYE));
     // base scale tuning for look
     const sliceHeight = Math.min(VIEW_H*2, (VIEW_H * 1.5) * (heightWorld / Math.max(0.0001, dist)));
@@ -355,7 +350,7 @@ function render(){
     const screenX = Math.round(HALF_W + Math.tan(relAng) * HALF_W / Math.tan(FOV/2));
     // vertical placement using ground height at sprite
     const groundY = getPlayerGroundY(s.x, s.z);
-    const eyeY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE;
+    const eyeY = getPlayerGroundY(playerX, playerZ) + PLAYER_EYE + playerEyeOffset;
     const verticalOffset = (eyeY - groundY) * 6;
     const screenY = Math.round(HALF_H - size/2 - verticalOffset);
     // draw trunk/foliage rectangle
@@ -399,7 +394,6 @@ function getPlayerGroundY(x,z){
 
 /* game loop: movement, gravity, collision step, render */
 let last = performance.now();
-let velY = 0;
 function loop(){
   const now = performance.now();
   let dt = Math.min(0.05, (now - last)/1000);
@@ -428,31 +422,25 @@ function loop(){
     if (canMoveTo(tryX2, tryZ2)) playerZ = tryZ2;
   }
 
-  // vertical physics (we keep player "on" surface)
-  const groundY = getPlayerGroundY(playerX, playerZ);
-  if (keys[' '] || keys['Space']) {
-    // jump if on ground
-    if (Math.abs((groundY+PLAYER_EYE) - (groundY + PLAYER_EYE)) < 100 && velY===0){
-      // allow jump when standing roughly on ground (simple)
-      velY = JUMP_V;
-    }
+  // jumping
+  if ((keys[' '] || keys['Space']) && onGround){
+    velY = JUMP_V;
+    onGround = false;
   }
-  // gravity
-  velY -= GRAV * dt;
-  // integrate eye offset (pure visual bob - we don't let player fly above the surface too far)
-  // we clamp vertical camera bob to [-0.6, 2.5] relative to ground
-  let eyeYOffset = 0;
-  eyeYOffset += velY * dt;
-  // decently simple: if we fall below ground, reset and set velY=0
-  const eyePos = groundY + PLAYER_EYE + eyeYOffset;
-  if (eyePos <= groundY + PLAYER_EYE - 0.01){
-    // land
-    velY = 0;
-    eyeYOffset = 0;
-  }
-  // Note: movement constrained to surface, so we don't run full vertical collision here.
 
-  // render
+  // gravity + integrate eye offset (visual)
+  velY -= GRAV * dt;
+  playerEyeOffset += velY * dt;
+
+  // landing detection: when eye offset goes <= 0 (on or below ground level)
+  const groundY = getPlayerGroundY(playerX, playerZ);
+  if (playerEyeOffset <= 0){
+    playerEyeOffset = 0;
+    velY = 0;
+    onGround = true;
+  }
+
+  // render (eye offset used in render via playerEyeOffset)
   render();
 
   requestAnimationFrame(loop);
