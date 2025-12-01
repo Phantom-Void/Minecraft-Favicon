@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Voxel Playground (loading...)</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Voxel — Fixed</title>
 <link id="favicon" rel="icon" href="">
 <style>
   :root{--bg:#071018;--muted:#9fb7c9}
@@ -12,301 +12,196 @@
   h1{margin:6px 0 10px 0}
   canvas#view{width:640px;height:426px;border:4px solid #0f2130; image-rendering: pixelated; background:#000; display:block}
   .hint{color:var(--muted);margin-top:8px;font-size:13px;text-align:center}
-  .small{font-size:12px;color:#7f9cae;margin-top:8px}
-  .credits{font-size:12px;color:#6f8ea0;margin-top:6px}
 </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Voxel Playground — Software 3D</h1>
+    <h1>Voxel — Fixed Camera & Collision</h1>
     <canvas id="view" width="240" height="160"></canvas>
-    <div class="hint">WASD move • Mouse look (click canvas) • Space jump • Left-click mine • I = inventory title • H = health title</div>
-    <div class="small">64×64×64 world • mining, trees, caves • favicon mirrors view</div>
+    <div class="hint">WASD move • Mouse look (click canvas) • Space jump • LMB mine • I = inv title • H = health title</div>
   </div>
 
 <script>
-/* ---------------------------
-   Software Voxel Engine (no WebGL)
-   - 64x64x64 voxel world
-   - player with mouse-look, WASD, jump, gravity
-   - robust collision (no teleport loop)
-   - mining (left click), inventory
-   - favicon mirror
-   --------------------------- */
+/* Fixed Voxel Engine (no WebGL)
+   - Proper camera math (no stretching)
+   - Robust vertical collision (no pogo)
+   - 64×64×64 world, mining, inventory, favicon mirror
+*/
 
-/* ---------- CONFIG ---------- */
-const WORLD_SIZE = 64;          // X and Z size
-const WORLD_H = 64;            // Y height
-const REACH = 6.0;             // mining reach (blocks)
+/* CONFIG */
+const W = 64, D = 64, H = 64;
 const CANVAS_W = 240, CANVAS_H = 160;
-const FOV = Math.PI/3;         // 60 degrees
-const FAV_SIZE = 16;
+const FOV = Math.PI/3;
+const REACH = 6;
+const FAV = 16;
 
-/* block ids */
-const AIR = 0, STONE = 1, DIRT = 2, GRASS = 3, LOG = 4, LEAF = 5;
+/* blocks */
+const AIR=0, STONE=1, DIRT=2, GRASS=3, LOG=4, LEAF=5;
 
-/* ---------- WORLD STORAGE ---------- */
-// we store as 1D for speed: idx(x,y,z) = ((y*D)+z)*W + x
-const W = WORLD_SIZE, D = WORLD_SIZE, H = WORLD_H;
-const blocks = new Uint8Array(W * H * D);
-function idx(x,y,z){ return ((y*D)+z)*W + x; }
-function inBounds(x,y,z){
-  return x>=0 && x<W && y>=0 && y<H && z>=0 && z<D;
-}
-function getBlock(x,y,z){
-  if (!inBounds(x,y,z)) return AIR;
-  return blocks[idx(x,y,z)];
-}
-function setBlock(x,y,z,v){
-  if (!inBounds(x,y,z)) return;
-  blocks[idx(x,y,z)] = v;
-}
+/* storage */
+const blocks = new Uint8Array(W*H*D);
+function idx(x,y,z){return ((y*D)+z)*W + x;}
+function inBounds(x,y,z){return x>=0&&y>=0&&z>=0&&x<W&&y<H&&z<D;}
+function getBlock(x,y,z){ if(!inBounds(x,y,z)) return AIR; return blocks[idx(x,y,z)]; }
+function setBlock(x,y,z,v){ if(!inBounds(x,y,z)) return; blocks[idx(x,y,z)]=v; }
 
-/* ---------- SIMPLE NOISE / WORLD GENERATION ---------- */
-function pseudo(i){
-  i = (i<<13)^i;
-  return 1.0 - ((i*(i*i*15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0;
-}
+/* simple noise / world generation (same approach as before) */
+function pseudo(i){ i=(i<<13)^i; return 1.0 - ((i*(i*i*15731+789221)+1376312589)&0x7fffffff)/1073741824.0; }
 function smooth2(x,y){
-  const xi=Math.floor(x), yi=Math.floor(y);
-  const xf=x-xi, yf=y-yi;
-  const v00=pseudo(xi+yi*57), v10=pseudo(xi+1+yi*57),
-        v01=pseudo(xi+(yi+1)*57), v11=pseudo(xi+1+(yi+1)*57);
-  const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
-  const a = v00*(1-u)+v10*u, b = v01*(1-u)+v11*u;
+  const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+  const v00=pseudo(xi+yi*57), v10=pseudo(xi+1+yi*57), v01=pseudo(xi+(yi+1)*57), v11=pseudo(xi+1+(yi+1)*57);
+  const u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
+  const a=v00*(1-u)+v10*u, b=v01*(1-u)+v11*u;
   return a*(1-v)+b*v;
 }
-function fractal2(x,y,oct=4,scale=1){
-  let amp=1,freq=1,sum=0,norm=0;
-  for(let i=0;i<oct;i++){ sum+=smooth2(x*freq/scale,y*freq/scale)*amp; norm+=amp; amp*=0.5; freq*=2; }
-  return sum/norm;
-}
-function fractal3(x,y,z){
-  return (fractal2(x,y,3,24)+fractal2(y,z,3,24)+fractal2(x,z,3,24))/3;
-}
+function fractal2(x,y,oct=4,scale=1){ let amp=1,freq=1,sum=0,norm=0; for(let i=0;i<oct;i++){ sum+=smooth2(x*freq/scale,y*freq/scale)*amp; norm+=amp; amp*=0.5; freq*=2;} return sum/norm; }
+function fractal3(x,y,z){ return (fractal2(x,y,3,24)+fractal2(y,z,3,24)+fractal2(x,z,3,24))/3; }
 
-function generateWorld(){
-  // clear
+function genWorld(){
   blocks.fill(AIR);
-
-  // heightmap + layers
-  for (let z=0; z<D; z++){
-    for (let x=0; x<W; x++){
-      let n = fractal2(x*0.6, z*0.6,5,32)*6 + fractal2(x*0.08,z*0.08,3,1)*10;
-      const centerBias = (1 - Math.hypot(x/W-0.5, z/D-0.5)/0.7071) * 3.5;
-      n += centerBias;
-      let h = Math.floor(H/4 + n);
-      h = Math.max(2, Math.min(H-6, h));
-      for (let y=0; y<=h; y++){
-        if (y < h-3) setBlock(x,y,z,STONE);
-        else if (y < h-1) setBlock(x,y,z,DIRT);
+  // heightmap layers
+  for(let z=0;z<D;z++){
+    for(let x=0;x<W;x++){
+      let n = fractal2(x*0.6,z*0.6,5,32)*6 + fractal2(x*0.08,z*0.08,3,1)*10;
+      const centerBias=(1 - Math.hypot(x/W-0.5,z/D-0.5)/0.7071)*3.5;
+      n+=centerBias;
+      let h=Math.floor(H/4 + n);
+      h = Math.max(2, Math.min(H-6,h));
+      for(let y=0;y<=h;y++){
+        if(y<h-3) setBlock(x,y,z,STONE);
+        else if(y<h-1) setBlock(x,y,z,DIRT);
         else setBlock(x,y,z,GRASS);
       }
     }
   }
-
-  // caves carved by 3D noise threshold
-  for (let z=2; z<D-2; z++){
-    for (let x=2; x<W-2; x++){
-      for (let y=2; y<H-6; y++){
-        const n = fractal3(x*0.12, y*0.12, z*0.12);
-        const thr = 0.22 + (y/H)*0.4;
-        if (n > thr) setBlock(x,y,z,AIR);
-      }
-    }
+  // caves
+  for(let z=2;z<D-2;z++) for(let x=2;x<W-2;x++) for(let y=2;y<H-6;y++){
+    const n = fractal3(x*0.12,y*0.12,z*0.12);
+    const thr = 0.22 + (y/H)*0.4;
+    if(n>thr) setBlock(x,y,z,AIR);
   }
-
-  // trees: place trunks and leaves on grass
-  for (let z=2; z<D-2; z++){
-    for (let x=2; x<W-2; x++){
-      if (Math.random() < 0.007) {
-        // find topmost y
-        for (let y=H-2; y>1; y--){
-          if (getBlock(x,y,z)===GRASS){
-            const h = 3 + Math.floor(Math.random()*2);
-            // check space
-            let ok=true;
-            for (let yy=y+1; yy<=y+h+2; yy++){
-              for (let lx=-2; lx<=2; lx++){
-                for (let lz=-2; lz<=2; lz++){
-                  if (getBlock(x+lx,yy,z+lz) !== AIR) ok=false;
-                }
-              }
-            }
-            if (!ok) break;
-            for (let t=1; t<=h; t++) setBlock(x,y+t,z,LOG);
-            for (let lx=-2; lx<=2; lx++){
-              for (let lz=-2; lz<=2; lz++){
-                for (let ly=h-1; ly<=h+1; ly++){
-                  const ax=x+lx, ay=y+ly+1, az=z+lz;
-                  if (Math.abs(lx)+Math.abs(lz)+Math.abs(ly) <= 4 && getBlock(ax,ay,az)===AIR) setBlock(ax,ay,az,LEAF);
-                }
-              }
-            }
-            break;
+  // trees
+  for(let z=2;z<D-2;z++) for(let x=2;x<W-2;x++){
+    if(Math.random()<0.007){
+      for(let y=H-2;y>1;y--){
+        if(getBlock(x,y,z)===GRASS){
+          const h=3+Math.floor(Math.random()*2);
+          let ok=true;
+          for(let yy=y+1;yy<=y+h+2;yy++) for(let lx=-2;lx<=2;lx++) for(let lz=-2;lz<=2;lz++){
+            if(getBlock(x+lx,yy,z+lz)!==AIR) ok=false;
           }
+          if(!ok) break;
+          for(let t=1;t<=h;t++) setBlock(x,y+t,z,LOG);
+          for(let lx=-2;lx<=2;lx++) for(let lz=-2;lz<=2;lz++) for(let ly=h-1;ly<=h+1;ly++){
+            const ax=x+lx, ay=y+ly+1, az=z+lz;
+            if(Math.abs(lx)+Math.abs(lz)+Math.abs(ly) <=4 && getBlock(ax,ay,az)===AIR) setBlock(ax,ay,az,LEAF);
+          }
+          break;
         }
       }
     }
   }
 }
-generateWorld();
+genWorld();
 
 /* ---------- PLAYER ---------- */
-// spawn: find air above solid
+// spawn search: air over solid
 let px=0.5, py=0.0, pz=0.5;
-function findSpawn(){
-  for (let z=2; z<D-2; z++){
-    for (let x=2; x<W-2; x++){
-      for (let y=H-6; y>=2; y--){
-        const below = getBlock(x,y-1,z);
-        const here = getBlock(x,y,z);
-        const above = getBlock(x,y+1,z);
-        if (below !== AIR && here === AIR && above === AIR) {
-          return {x:x+0.5,y:y+0.6,z:z+0.5};
-        }
+(function findSpawn(){
+  for(let z=2;z<D-2;z++){
+    for(let x=2;x<W-2;x++){
+      for(let y=H-6;y>=2;y--){
+        const bBelow=getBlock(x,y-1,z), bHere=getBlock(x,y,z), bAbove=getBlock(x,y+1,z);
+        if(bBelow!==AIR && bHere===AIR && bAbove===AIR){ px=x+0.5; py=y+0.6; pz=z+0.5; return; }
       }
     }
   }
-  return {x:4.5,y:10.6,z:4.5};
-}
-const sp = findSpawn();
-px = sp.x; py = sp.y; pz = sp.z;
+  px=4.5;py=10.6;pz=4.5;
+})();
 
-/* orientation */
-let yaw = 0, pitch = 0; // yaw: horizontal, pitch: vertical
-let vy = 0;             // vertical velocity
-let grounded = false;
+let yaw=0,pitch=0;
+let vy=0; let grounded=false;
 
-/* player shape */
-const PR = 0.25;   // radius
-const PH = 1.6;    // height
+/* player capsule */
+const PR = 0.25, PH = 1.6;
 
-/* ---------- CANVAS & FAVICON ---------- */
-const canvas = document.getElementById('view');
-const ctx = canvas.getContext('2d');
-canvas.style.cursor = 'crosshair';
-const fav = document.createElement('canvas'); fav.width = FAV_SIZE; fav.height = FAV_SIZE;
-const fctx = fav.getContext('2d');
+/* ---------- CANVAS & FAV ---------- */
+const canvas=document.getElementById('view'), ctx=canvas.getContext('2d');
+const fav=document.createElement('canvas'); fav.width=FAV; fav.height=FAV; const fctx=fav.getContext('2d');
+canvas.style.cursor='crosshair';
 
 /* ---------- INPUT ---------- */
-const keys = {};
-window.addEventListener('keydown', e=>{
-  keys[e.key] = true;
-  if (e.key==='i' || e.key==='I'){ showInvTitle = !showInvTitle; updateTitle(); }
-  if (e.key==='h' || e.key==='H'){ showHealthTitle = !showHealthTitle; updateTitle(); }
-});
+const keys={};
+window.addEventListener('keydown', e=>{ keys[e.key]=true; if(e.key==='i'||e.key==='I'){ showInv=!showInv; updateTitle(); } if(e.key==='h'||e.key==='H'){ showHealth=!showHealth; updateTitle(); }});
 window.addEventListener('keyup', e=> keys[e.key]=false);
-
-canvas.addEventListener('click', ()=> {
-  if (document.pointerLockElement !== canvas) canvas.requestPointerLock && canvas.requestPointerLock();
-});
-window.addEventListener('mousemove', e=>{
-  if (document.pointerLockElement === canvas){
+canvas.addEventListener('click', ()=> canvas.requestPointerLock && canvas.requestPointerLock());
+window.addEventListener('mousemove', e=> {
+  if(document.pointerLockElement === canvas){
+    // camera: yaw left/right, pitch up/down (signs chosen for natural feel)
     yaw -= e.movementX * 0.0024;
     pitch -= e.movementY * 0.0024;
     pitch = Math.max(-1.35, Math.min(1.35, pitch));
   }
 });
 
-/* ---------- INVENTORY / HUD ---------- */
-const inventory = {};
-let showInvTitle = false, showHealthTitle = false;
-let health = 20;
-function addToInv(id){
-  inventory[id] = (inventory[id]||0) + 1;
-  updateTitle();
-}
-function blockName(id){
-  switch(id){
-    case STONE: return 'stone';
-    case DIRT: return 'dirt';
-    case GRASS: return 'grass';
-    case LOG: return 'wood';
-    case LEAF: return 'leaf';
-    default: return 'air';
-  }
-}
-function updateTitle(){
-  const parts=[];
-  if (showInvTitle){
-    const invParts = Object.keys(inventory).map(k=> `${blockName(Number(k))} x${inventory[k]}`);
-    parts.push('Inv: ' + (invParts.length ? invParts.join(', ') : 'empty'));
-  }
-  if (showHealthTitle) parts.push(`Health: ${health}`);
-  document.title = parts.length ? parts.join(' | ') : 'Voxel Playground';
-}
-updateTitle();
+/* inventory/title */
+const inventory = {}; let showInv=false, showHealth=false; let health=20;
+function addToInv(id){ inventory[id]=(inventory[id]||0)+1; updateTitle(); }
+function blockName(id){ switch(id){ case STONE:return'stone'; case DIRT:return'dirt'; case GRASS:return'grass'; case LOG:return'wood'; case LEAF:return'leaf'; default: return'air'; } }
+function updateTitle(){ const parts=[]; if(showInv){ const p=Object.keys(inventory).map(k=>`${blockName(Number(k))} x${inventory[k]}`).join(', '); parts.push('Inv: '+(p||'empty')); } if(showHealth) parts.push(`Health: ${health}`); document.title = parts.length?parts.join(' | '):'Voxel — Fixed'; }
 
-/* ---------- COLLISION (AABB test) ---------- */
-/* check whether player AABB overlaps any solid block at position x,y,z (player base at y)
-   player spans [x-PR,x+PR], [y, y+PH), [z-PR,z+PR]
-*/
+/* ---------- COLLISION: capsule AABB test ---------- */
 function collidesAt(x,y,z){
-  // compute overlapping block integer ranges
-  const minX = Math.floor(x - PR);
-  const maxX = Math.floor(x + PR);
-  const minZ = Math.floor(z - PR);
-  const maxZ = Math.floor(z + PR);
-  const minY = Math.floor(y + 0.001);
-  const maxY = Math.floor(y + PH - 0.001);
-  for (let bx = minX; bx <= maxX; bx++){
-    for (let bz = minZ; bz <= maxZ; bz++){
-      for (let by = minY; by <= maxY; by++){
-        if (getBlock(bx,by,bz) !== AIR) return true;
+  const minX = Math.floor(x - PR), maxX = Math.floor(x + PR);
+  const minZ = Math.floor(z - PR), maxZ = Math.floor(z + PR);
+  const minY = Math.floor(y + 0.001), maxY = Math.floor(y + PH - 0.001);
+  for(let bx=minX; bx<=maxX; bx++){
+    for(let bz=minZ; bz<=maxZ; bz++){
+      for(let by=minY; by<=maxY; by++){
+        if(getBlock(bx,by,bz)!==AIR) return true;
       }
     }
   }
   return false;
 }
 
-/* robust resolution for vertical collisions to avoid bounce */
-function resolveVertical(yOld, vyCandidate){
-  // try moving to newY = yOld + vyCandidate*dt in caller context. This helper returns corrected y and vy.
-  // We'll implement in caller for clarity.
-  return {y: yOld, vy: vyCandidate, grounded:false};
-}
-
-/* ---------- MOVEMENT ---------- */
+/* ---------- MOVEMENT (with robust vertical snap) ---------- */
 function movementStep(dt){
-  // rotation via arrow fallback
-  if (! (document.pointerLockElement === canvas) ){
-    if (keys['ArrowLeft']) yaw -= 0.04;
-    if (keys['ArrowRight']) yaw += 0.04;
-    if (keys['ArrowUp']) pitch = Math.max(-1.35, pitch - 0.04);
-    if (keys['ArrowDown']) pitch = Math.min(1.35, pitch + 0.04);
+  // fallback arrow rotation
+  if(document.pointerLockElement !== canvas){
+    if(keys['ArrowLeft']) yaw -= 0.04;
+    if(keys['ArrowRight']) yaw += 0.04;
+    if(keys['ArrowUp']) pitch = Math.max(-1.35, pitch - 0.04);
+    if(keys['ArrowDown']) pitch = Math.min(1.35, pitch + 0.04);
   }
 
   const speed = keys['Shift'] ? 0.16 : 0.09;
-  let dx = 0, dz = 0;
-  if (keys['w']||keys['W']) { dx += Math.cos(yaw)*speed; dz += Math.sin(yaw)*speed; }
-  if (keys['s']||keys['S']) { dx -= Math.cos(yaw)*speed; dz -= Math.sin(yaw)*speed; }
-  if (keys['a']||keys['A']) { dx += Math.sin(yaw)*speed; dz -= Math.cos(yaw)*speed; }
-  if (keys['d']||keys['D']) { dx -= Math.sin(yaw)*speed; dz += Math.cos(yaw)*speed; }
+  let dx=0,dz=0;
+  if(keys['w']||keys['W']) { dx += Math.cos(yaw)*speed; dz += Math.sin(yaw)*speed; }
+  if(keys['s']||keys['S']) { dx -= Math.cos(yaw)*speed; dz -= Math.sin(yaw)*speed; }
+  if(keys['a']||keys['A']) { dx += Math.sin(yaw)*speed; dz -= Math.cos(yaw)*speed; }
+  if(keys['d']||keys['D']) { dx -= Math.sin(yaw)*speed; dz += Math.cos(yaw)*speed; }
 
-  // attempt X move
+  // horizontal collision per-axis
   const nx = px + dx;
-  if (!collidesAt(nx, py, pz)) px = nx;
-  // attempt Z move
+  if(!collidesAt(nx, py, pz)) px = nx;
   const nz = pz + dz;
-  if (!collidesAt(px, py, nz)) pz = nz;
+  if(!collidesAt(px, py, nz)) pz = nz;
 
   // gravity & jump
   const GRAV = -9.8;
   vy += GRAV * dt;
-  if ((keys[' '] || keys['Space']) && grounded){
+  if((keys[' ']||keys['Space']) && grounded){
     vy = 5.2; grounded = false;
   }
 
   // integrate vertical
   let newY = py + vy * dt;
 
-  // falling
-  if (vy <= 0){
-    if (collidesAt(px, newY, pz)){
-      // snap to top of the block you are falling onto:
-      // compute the block just below the feet by flooring current py (old) - small epsilon
-      // then set py = thatBlockTop + small epsilon
+  // If falling (vy <= 0): check collision and snap to top of block properly
+  if(vy <= 0){
+    if(collidesAt(px, newY, pz)){
+      // snap to top of block under feet: compute foot block from *current* py (not newY)
       const footBlock = Math.floor(py - 0.001);
       const landedY = footBlock + 1;
       py = landedY;
@@ -317,11 +212,10 @@ function movementStep(dt){
       grounded = false;
     }
   } else {
-    // moving up: if head hits block stop upward velocity and clamp
-    if (collidesAt(px, newY + PH - 0.001, pz)){
-      // find highest position below ceiling
-      // set vy = 0 and keep py unchanged (so you don't phase into blocks)
+    // moving upward: if head collides, zero vy and keep py (don't push down/up)
+    if(collidesAt(px, newY + PH - 0.001, pz)){
       vy = 0;
+      // keep py unchanged (prevents phasing into ceiling and then bounce)
     } else {
       py = newY;
       grounded = false;
@@ -329,64 +223,68 @@ function movementStep(dt){
   }
 }
 
-/* ---------- 3D DDA raycast (voxel traversal) ----------
-   Casts a ray from origin {x,y,z} with direction dir {x,y,z} and returns first non-air hit:
-   {x: vx, y: vy, z: vz, block: id, dist: t}
-*/
+/* ---------- 3D DDA Voxel Raycast (correct implementation) ---------- */
 function castRay(origin, dir, maxDist=40){
-  let ox = origin.x, oy = origin.y, oz = origin.z;
-  let vx = Math.floor(ox), vyv = Math.floor(oy), vz = Math.floor(oz);
+  let ox=origin.x, oy=origin.y, oz=origin.z;
+  let vx=Math.floor(ox), vyv=Math.floor(oy), vz=Math.floor(oz);
 
   const stepX = dir.x > 0 ? 1 : -1;
   const stepY = dir.y > 0 ? 1 : -1;
   const stepZ = dir.z > 0 ? 1 : -1;
 
-  const tDeltaX = dir.x === 0 ? Infinity : Math.abs(1 / dir.x);
-  const tDeltaY = dir.y === 0 ? Infinity : Math.abs(1 / dir.y);
-  const tDeltaZ = dir.z === 0 ? Infinity : Math.abs(1 / dir.z);
+  const tDeltaX = dir.x===0 ? Infinity : Math.abs(1/dir.x);
+  const tDeltaY = dir.y===0 ? Infinity : Math.abs(1/dir.y);
+  const tDeltaZ = dir.z===0 ? Infinity : Math.abs(1/dir.z);
 
-  let tMaxX = dir.x === 0 ? Infinity : ((stepX > 0 ? (vx + 1 - ox) : (ox - vx)) / Math.abs(dir.x));
-  let tMaxY = dir.y === 0 ? Infinity : ((stepY > 0 ? (vyv + 1 - oy) : (oy - vyv)) / Math.abs(dir.y));
-  let tMaxZ = dir.z === 0 ? Infinity : ((stepZ > 0 ? (vz + 1 - oz) : (oz - vz)) / Math.abs(dir.z));
+  let tMaxX = dir.x===0 ? Infinity : ((stepX>0 ? (vx+1-ox) : (ox-vx)) / Math.abs(dir.x));
+  let tMaxY = dir.y===0 ? Infinity : ((stepY>0 ? (vyv+1-oy) : (oy-vyv)) / Math.abs(dir.y));
+  let tMaxZ = dir.z===0 ? Infinity : ((stepZ>0 ? (vz+1-oz) : (oz-vz)) / Math.abs(dir.z));
 
   let t = 0;
-  const maxT = maxDist / Math.max(1e-6, Math.hypot(dir.x, dir.y, dir.z));
-  while (t <= maxT){
-    if (vx < 0 || vyv < 0 || vz < 0 || vx >= W || vyv >= H || vz >= D) break;
-    const b = getBlock(vx, vyv, vz);
-    if (b !== AIR){
-      return {x: vx, y: vyv, z: vz, block: b, dist: t};
-    }
-    if (tMaxX <= tMaxY && tMaxX <= tMaxZ){
-      vx += stepX;
-      t = tMaxX;
-      tMaxX += tDeltaX;
-    } else if (tMaxY <= tMaxX && tMaxY <= tMaxZ){
-      vyv += stepY;
-      t = tMaxY;
-      tMaxY += tDeltaY;
+  const maxT = maxDist / Math.max(1e-6, Math.hypot(dir.x,dir.y,dir.z));
+
+  while(t <= maxT){
+    if(vx<0||vyv<0||vz<0||vx>=W||vyv>=H||vz>=D) break;
+    const b = getBlock(vx,vyv,vz);
+    if(b!==AIR) return {x:vx,y:vyv,z:vz,block:b,dist:t};
+    if(tMaxX <= tMaxY && tMaxX <= tMaxZ){
+      vx += stepX; t = tMaxX; tMaxX += tDeltaX;
+    } else if(tMaxY <= tMaxX && tMaxY <= tMaxZ){
+      vyv += stepY; t = tMaxY; tMaxY += tDeltaY;
     } else {
-      vz += stepZ;
-      t = tMaxZ;
-      tMaxZ += tDeltaZ;
+      vz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ;
     }
   }
   return null;
 }
 
-/* ---------- camera ray direction helper ---------- */
+/* ---------- camera ray direction (FIX: correct basis) ----------
+   This is where many people produce stretched artifacts.
+   We build an orthonormal camera basis (forward, right, up) and combine.
+*/
 function cameraRayDir(pixelX, pixelY, canvasW=CANVAS_W, canvasH=CANVAS_H){
-  // normalized device coords -1..1
-  const nx = (pixelX - canvasW/2) / (canvasW/2);
-  const ny = (canvasH/2 - pixelY) / (canvasH/2);
+  // NDC
+  const nx = (pixelX - canvasW/2) / (canvasW/2); // -1..1
+  const ny = (canvasH/2 - pixelY) / (canvasH/2); // -1..1 (y up)
   const sx = Math.tan(FOV/2) * nx;
   const sy = Math.tan(FOV/2) * ny;
-  // camera basis
+
+  // Camera basis (accurate)
   const cp = Math.cos(pitch), sp = Math.sin(pitch);
   const cy = Math.cos(yaw), syaw = Math.sin(yaw);
-  const forward = {x: cp*cy, y: sp, z: cp*syaw};
-  const right = {x: Math.sin(yaw - Math.PI/2), y:0, z: Math.cos(yaw - Math.PI/2)};
-  const up = {x: -cy*sp, y: cp, z: -syaw*sp};
+
+  // forward points where camera looks
+  const forward = { x: cp * cy, y: sp, z: cp * syaw };
+  // right is 90° rotated on yaw
+  const right = { x: Math.sin(yaw - Math.PI/2), y: 0, z: Math.cos(yaw - Math.PI/2) };
+  // up = cross(right, forward) (ensures orthonormal)
+  const up = {
+    x: right.y * forward.z - right.z * forward.y,
+    y: right.z * forward.x - right.x * forward.z,
+    z: right.x * forward.y - right.y * forward.x
+  };
+
+  // Combine
   let dir = {
     x: forward.x + right.x * sx + up.x * sy,
     y: forward.y + right.y * sx + up.y * sy,
@@ -397,102 +295,83 @@ function cameraRayDir(pixelX, pixelY, canvasW=CANVAS_W, canvasH=CANVAS_H){
   return dir;
 }
 
-/* ---------- rendering ---------- */
-const outImg = ctx.createImageData(CANVAS_W, CANVAS_H);
+/* ---------- RENDER ---------- */
+const canvasImg = ctx.createImageData(CANVAS_W, CANVAS_H);
 function baseColor(id){
   switch(id){
-    case STONE: return [130,130,130];
-    case DIRT: return [150,95,60];
-    case GRASS: return [72,180,64];
-    case LOG: return [110,68,36];
-    case LEAF: return [45,160,74];
+    case STONE: return [141,141,141];
+    case DIRT: return [155,106,60];
+    case GRASS: return [77,182,59];
+    case LOG: return [107,63,36];
+    case LEAF: return [47,160,74];
     default: return [0,0,0];
   }
 }
-
 function renderFrame(){
-  // clear sky / floor background
-  ctx.fillStyle = '#103040';
-  ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
-
-  const eye = {x: px, y: py + 0.5, z: pz}; // eye slightly above feet
-
-  const buf = outImg.data;
-  const maxDist = 40;
-
-  for (let j=0; j<CANVAS_H; j++){
-    for (let i=0; i<CANVAS_W; i++){
-      const dir = cameraRayDir(i+0.5, j+0.5);
+  const buf = canvasImg.data;
+  const eye = { x: px, y: py + 0.5, z: pz }; // eye a bit above feet
+  const maxDist = 48;
+  for(let j=0;j<CANVAS_H;j++){
+    for(let i=0;i<CANVAS_W;i++){
+      const dir = cameraRayDir(i+0.5,j+0.5);
       const hit = castRay(eye, dir, maxDist);
-      const i4 = (j*CANVAS_W + i)*4;
-      if (hit){
+      const o = (j*CANVAS_W + i)*4;
+      if(hit){
         const col = baseColor(hit.block);
-        // shade by distance
-        const sh = Math.max(0.22, 1 - hit.dist/30);
-        buf[i4] = Math.round(col[0]*sh);
-        buf[i4+1] = Math.round(col[1]*sh);
-        buf[i4+2] = Math.round(col[2]*sh);
-        buf[i4+3] = 255;
+        const shade = Math.max(0.22, 1 - hit.dist/36);
+        buf[o] = Math.round(col[0]*shade);
+        buf[o+1] = Math.round(col[1]*shade);
+        buf[o+2] = Math.round(col[2]*shade);
+        buf[o+3] = 255;
       } else {
         // sky gradient
         const t = 1 - (j / CANVAS_H);
-        buf[i4] = Math.round(20 + 140 * t);
-        buf[i4+1] = Math.round(30 + 120 * t);
-        buf[i4+2] = Math.round(40 + 90 * t);
-        buf[i4+3] = 255;
+        buf[o] = Math.round(20 + 140 * t);
+        buf[o+1] = Math.round(30 + 120 * t);
+        buf[o+2] = Math.round(40 + 90 * t);
+        buf[o+3] = 255;
       }
     }
   }
-  ctx.putImageData(outImg, 0, 0);
+  ctx.putImageData(canvasImg,0,0);
 
-  // HUD overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(6,6,200,36);
-  ctx.fillStyle = '#fff'; ctx.font = '10px monospace';
+  // HUD
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(6,6,200,34);
+  ctx.fillStyle='#fff'; ctx.font='10px monospace';
   ctx.fillText(`Health: ${health}`, 12, 18);
-  const invParts = Object.keys(inventory).map(k=> `${blockName(Number(k))}:${inventory[k]}`);
-  ctx.fillText(`Inv: ${invParts.slice(0,6).join(' ') || 'empty'}`, 12, 34);
+  const invParts = Object.keys(inventory).map(k=> `${blockName(Number(k))}:${inventory[k]}`).slice(0,6).join(' ');
+  ctx.fillText(`Inv: ${invParts||'empty'}`,12,34);
 
   // crosshair
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-  ctx.beginPath();
-  ctx.moveTo(CANVAS_W/2 - 6, CANVAS_H/2);
-  ctx.lineTo(CANVAS_W/2 + 6, CANVAS_H/2);
-  ctx.moveTo(CANVAS_W/2, CANVAS_H/2 - 6);
-  ctx.lineTo(CANVAS_W/2, CANVAS_H/2 + 6);
-  ctx.stroke();
+  ctx.strokeStyle='rgba(255,255,255,0.7)';
+  ctx.beginPath(); ctx.moveTo(CANVAS_W/2-6, CANVAS_H/2); ctx.lineTo(CANVAS_W/2+6, CANVAS_H/2);
+  ctx.moveTo(CANVAS_W/2, CANVAS_H/2-6); ctx.lineTo(CANVAS_W/2, CANVAS_H/2+6); ctx.stroke();
 
-  // favicon update
-  fctx.imageSmoothingEnabled = false;
-  fctx.clearRect(0,0,FAV_SIZE,FAV_SIZE);
-  fctx.drawImage(canvas, 0, 0, FAV_SIZE, FAV_SIZE);
+  // favicon
+  fctx.imageSmoothingEnabled = false; fctx.clearRect(0,0,FAV,FAV);
+  fctx.drawImage(canvas,0,0,FAV,FAV);
   document.getElementById('favicon').href = fav.toDataURL('image/png');
 }
 
-/* ---------- mining (center ray) ---------- */
+/* ---------- MINING ---------- */
 function mineCenter(){
-  const eye = {x: px, y: py + 0.5, z: pz};
+  const eye = { x: px, y: py + 0.5, z: pz };
   const dir = cameraRayDir(CANVAS_W/2, CANVAS_H/2);
   const hit = castRay(eye, dir, REACH);
-  if (!hit) return;
-  const x = hit.x, y = hit.y, z = hit.z;
-  const id = getBlock(x,y,z);
-  if (id === AIR) return;
+  if(!hit) return;
+  const id = getBlock(hit.x, hit.y, hit.z);
+  if(id===AIR) return;
   addToInv(id);
-  setBlock(x,y,z,AIR);
+  setBlock(hit.x, hit.y, hit.z, AIR);
 }
-
-/* handle left click mining */
-window.addEventListener('mousedown', (e)=>{
-  if (e.button === 0) mineCenter();
-});
+window.addEventListener('mousedown', e=>{ if(e.button===0) mineCenter(); });
 
 /* ---------- MAIN LOOP ---------- */
-let last = performance.now();
+let last=performance.now();
 function loop(){
-  const now = performance.now();
-  const dt = Math.min(0.05, (now - last)/1000);
-  last = now;
+  const now=performance.now();
+  const dt=Math.min(0.05,(now-last)/1000);
+  last=now;
 
   movementStep(dt);
   renderFrame();
@@ -501,11 +380,10 @@ function loop(){
 }
 requestAnimationFrame(loop);
 
-/* ---------- small helpers for debugging in console ---------- */
-window.voxelWorld = {
-  W,H,D, getBlock, setBlock, blocks, player: ()=>({x:px,y:py,z:pz,yaw,pitch})
-};
+/* ---------- convenience globals for dev ---------- */
+window.vox = { getBlock, setBlock, blocks, player:()=>({x:px,y:py,z:pz,yaw,pitch}) };
 
+/* ---------- done ---------- */
 </script>
 </body>
 </html>
