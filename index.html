@@ -43,9 +43,11 @@ fav.height = 16;
 const fctx = fav.getContext("2d");
 
 // ==============================
-// WORLD MAP (simple blocks)
+// CUSTOM MAP — MAKE YOUR OWN!
 // ==============================
 // 0 = air, 1 = stone, 2 = dirt, 3 = grass
+// Edit this however you want.
+// Must stay rectangular.
 const map = [
   [1,1,1,1,1,1,1,1],
   [1,0,0,0,0,0,0,1],
@@ -57,8 +59,8 @@ const map = [
   [1,1,1,1,1,1,1,1],
 ];
 
-const MAP_W = 8;
-const MAP_H = 8;
+const MAP_W = map[0].length;
+const MAP_H = map.length;
 
 // ==============================
 // PLAYER
@@ -72,13 +74,24 @@ document.addEventListener("keydown", e => keys[e.key] = true);
 document.addEventListener("keyup",   e => keys[e.key] = false);
 
 // ==============================
-// COLLECT COLORS FOR BLOCKS
+// BLOCK COLORS
 // ==============================
 function blockColor(id) {
     if (id === 1) return "#808080"; // stone
     if (id === 2) return "#a0522d"; // dirt
     if (id === 3) return "#00cc00"; // grass
     return null;
+}
+
+// ==============================
+// COLLISION CHECK
+// ==============================
+function isWall(x, y) {
+    x = Math.floor(x);
+    y = Math.floor(y);
+
+    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return true;
+    return map[y][x] !== 0;
 }
 
 // ==============================
@@ -112,6 +125,7 @@ function render() {
     fctx.fillStyle = "#000";
     fctx.fillRect(0,0,16,16);
 
+    // Main on-page view (60px)
     for (let x = 0; x < 60; x++) {
         let rayAngle = angle + (x - 30) * 0.03;
         let hit = castRay(rayAngle);
@@ -123,7 +137,7 @@ function render() {
         }
     }
 
-    // tiny favicon render
+    // Favicon view (16px)
     for (let x = 0; x < 16; x++) {
         let rayAngle = angle + (x - 8) * 0.12;
         let hit = castRay(rayAngle);
@@ -135,40 +149,49 @@ function render() {
         }
     }
 
-    // set favicon
-    document.getElementById("favicon").href = fav.toDataURL("image/png");
+    document.getElementById("favicon").href =
+        fav.toDataURL("image/png");
 
     requestAnimationFrame(render);
 }
 
 // ==============================
-// MOVEMENT LOOP
+// MOVEMENT WITH COLLISION
 // ==============================
 function movement() {
     const speed = 0.05;
 
-    if (keys["ArrowLeft"])  angle -= 0.05;
-    if (keys["ArrowRight"]) angle += 0.05;
-
     let dx = Math.cos(angle);
     let dy = Math.sin(angle);
 
+    let nx = px;
+    let ny = py;
+
+    // Movement input
     if (keys["w"]) {
-        px += dx * speed;
-        py += dy * speed;
+        nx += dx * speed;
+        ny += dy * speed;
     }
     if (keys["s"]) {
-        px -= dx * speed;
-        py -= dy * speed;
+        nx -= dx * speed;
+        ny -= dy * speed;
     }
     if (keys["a"]) {
-        px += dy * speed;
-        py -= dx * speed;
+        nx += dy * speed;
+        ny -= dx * speed;
     }
     if (keys["d"]) {
-        px -= dy * speed;
-        py += dx * speed;
+        nx -= dy * speed;
+        ny += dx * speed;
     }
+
+    // Apply collision
+    if (!isWall(nx, py)) px = nx;
+    if (!isWall(px, ny)) py = ny;
+
+    // Look left/right
+    if (keys["ArrowLeft"])  angle -= 0.05;
+    if (keys["ArrowRight"]) angle += 0.05;
 
     requestAnimationFrame(movement);
 }
@@ -176,6 +199,7 @@ function movement() {
 render();
 movement();
 </script>
+
 
 </body>
 </html>
