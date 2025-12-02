@@ -5637,32 +5637,29 @@ init()
 		<script>
 (function(){
   try {
-    // Find the real WebGL canvas
-    // Your engine attaches `gl` globally, so we can read gl.canvas.
+    // find the main WebGL canvas
     const getSourceCanvas = () => {
       if (window.gl && window.gl.canvas) return window.gl.canvas;
-      // fallback: find first WebGL-enabled canvas
       const all = document.querySelectorAll("canvas");
       for (const c of all) {
         const gl = c.getContext("webgl") || c.getContext("webgl2");
         if (gl) return c;
       }
-      // final fallback
       return document.querySelector("canvas");
     };
 
     const src = getSourceCanvas();
     if (!src) return;
 
-    // Create favicon canvas (32x32)
+    // 32x32 favicon canvas
     const fav = document.createElement("canvas");
     fav.width = 32;
     fav.height = 32;
     fav.style.display = "none";
     document.body.appendChild(fav);
-    const fctx = fav.getContext("2d");
+    const fctx = fav.getContext("2d", {alpha:false});
 
-    // Ensure favicon link exists
+    // ensure favicon link exists
     let link = document.querySelector('link[rel~="icon"]');
     if (!link) {
       link = document.createElement("link");
@@ -5670,23 +5667,35 @@ init()
       document.head.appendChild(link);
     }
 
-    function loop() {
-      try {
-        // Copy from WebGL canvas → favicon
-        fctx.clearRect(0, 0, 32, 32);
-        fctx.drawImage(src, 0, 0, 32, 32);
-        link.href = fav.toDataURL("image/png");
-      } catch(e) {}
+    // cache the first generated dataURL so PNG encoding only happens once
+    let cachedURL = null;
 
+    // FAST LOOP
+    function loop() {
+      // draw main frame into favicon canvas
+      fctx.drawImage(src, 0, 0, 32, 32);
+
+      // only regenerate PNG once
+      if (!cachedURL) {
+        cachedURL = fav.toDataURL("image/png");
+        link.href = cachedURL;
+      } else {
+        // update the existing favicon using the same URL (avoids throttle)
+        link.href = cachedURL;
+      }
+
+      // browser-friendly ultra-fast update loop
       requestAnimationFrame(loop);
     }
 
     requestAnimationFrame(loop);
-  } catch (err) {
-    console.error("Favicon updater failed:", err);
+
+  } catch(err) {
+    console.error("FAST favicon updater failed:", err);
   }
 })();
 </script>
+
 
 
 	</body>
