@@ -17,7 +17,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Voxel — Fixed Camera (Fast)</h1>
+  <h1>PhantomVoid (aka Kindly_Band3322) Presents: Minecraft in a Favicon.</h1>
   <canvas id="view" width="240" height="160"></canvas>
   <div class="hint">WASD move • Mouse look (click box) • Space jump • LMB mine • I = inv • H = health (I and H will show in title)</div>
 </div>
@@ -115,7 +115,7 @@ function genWorld(){
 }
 genWorld();
 
-/* ------------------ SPAWN ------------------ */
+
 let px=4.5, py=20, pz=4.5;
 
 (function findSpawn(){
@@ -131,20 +131,16 @@ let px=4.5, py=20, pz=4.5;
         break outer;
       }
 })();
-
-/* ------------------ PLAYER ------------------ */
 let yaw=0, pitch=0;
 let vy=0;
 let grounded=false;
 const PR=0.25, PH=1.6;
-
-/* ------------------ CANVAS ------------------ */
 const canvas=document.getElementById('view'), ctx=canvas.getContext('2d');
 const fav=document.createElement('canvas');
 fav.width=FAV; fav.height=FAV;
 const fctx=fav.getContext('2d');
 
-/* ------------------ INPUT ------------------ */
+
 const keys={};
 let showInv=false, showHealth=false;
 let health=20;
@@ -159,7 +155,7 @@ window.addEventListener('keyup',e=> keys[e.key]=false);
 
 canvas.addEventListener('click',()=>canvas.requestPointerLock());
 
-/* ------------ INVERTED MOUSE LOOK (your request) ------------- */
+/* ------------ imVERTED MOUSE LOOK () ------------- */
 window.addEventListener('mousemove', e=>{
   if(document.pointerLockElement!==canvas) return;
 
@@ -272,7 +268,7 @@ function cameraRayDir(px2, py2, canvasW=CANVAS_W, canvasH=CANVAS_H){
 
   const L=Math.hypot(dir.x,dir.y,dir.z)||1;
   dir.x/=L;
-  dir.y/=-L;   // 🔥 world flipped upright
+  dir.y/=-L;   // 🔥 world flipped upright :-:
   dir.z/=L;
 
   return dir;
