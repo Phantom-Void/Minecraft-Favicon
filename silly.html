@@ -5634,67 +5634,60 @@ init()
 
 
 	</script>
-		<!-- BEGIN: Live favicon + preview updater (paste BEFORE </body>) -->
-<script>
+		<script>
 (function(){
   try {
-    // Make sure the main overlay canvas exists
-    const previewCanvas = window.canvas || document.getElementById('overlay') || document.querySelector('canvas');
-    if (!previewCanvas) return;
-
-    // Create favicon canvas (32x32)
-    const faviconCanvas = document.createElement('canvas');
-    faviconCanvas.width = 32;
-    faviconCanvas.height = 32;
-    faviconCanvas.style.display = 'none';
-    document.body.appendChild(faviconCanvas);
-    const fctx = faviconCanvas.getContext('2d');
-
-    // Ensure there's a <link rel="icon"> to update
-    let link = document.querySelector('link[rel~="icon"]');
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      document.head.appendChild(link);
-    }
-
-    // Resize-fallback: if preview canvas is very small, try to use the WebGL canvas
+    // Find the real WebGL canvas
+    // Your engine attaches `gl` globally, so we can read gl.canvas.
     const getSourceCanvas = () => {
-      // prefer the overlay 2D canvas which already composites the GL canvas and HUD
-      if (window.canvas && window.canvas.getContext) return window.canvas;
-      // try to find a WebGL canvas (common id usage in this file: gl.canvas)
       if (window.gl && window.gl.canvas) return window.gl.canvas;
-      // fallback to any canvas on the page
-      return document.querySelector('canvas');
+      // fallback: find first WebGL-enabled canvas
+      const all = document.querySelectorAll("canvas");
+      for (const c of all) {
+        const gl = c.getContext("webgl") || c.getContext("webgl2");
+        if (gl) return c;
+      }
+      // final fallback
+      return document.querySelector("canvas");
     };
 
     const src = getSourceCanvas();
+    if (!src) return;
 
-    // Update favicon each animation frame (lightweight)
-    function updateFavicon() {
-      try {
-        // clear the favicon canvas
-        fctx.clearRect(0, 0, 32, 32);
-        // draw the source scaled to 32x32
-        fctx.drawImage(src, 0, 0, 32, 32);
-        // set as favicon (PNG)
-        link.href = faviconCanvas.toDataURL('image/png');
-      } catch (e) {
-        // ignore occasional cross-origin or race errors
-      }
-      requestAnimationFrame(updateFavicon);
+    // Create favicon canvas (32x32)
+    const fav = document.createElement("canvas");
+    fav.width = 32;
+    fav.height = 32;
+    fav.style.display = "none";
+    document.body.appendChild(fav);
+    const fctx = fav.getContext("2d");
+
+    // Ensure favicon link exists
+    let link = document.querySelector('link[rel~="icon"]');
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
     }
 
-    // Start loop after a small delay so your engine has time to initialize
-    setTimeout(() => {
-      requestAnimationFrame(updateFavicon);
-    }, 250);
+    function loop() {
+      try {
+        // Copy from WebGL canvas → favicon
+        fctx.clearRect(0, 0, 32, 32);
+        fctx.drawImage(src, 0, 0, 32, 32);
+        link.href = fav.toDataURL("image/png");
+      } catch(e) {}
+
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
   } catch (err) {
-    console.error("Favicon live-preview init failed:", err);
+    console.error("Favicon updater failed:", err);
   }
 })();
 </script>
-<!-- END: Live favicon + preview updater -->
+
 
 	</body>
 </html>
