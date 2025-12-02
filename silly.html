@@ -4,8 +4,44 @@
 <html>
 	<head>
 		<meta charset="utf-8">
-		<title>Minecraft</title>
+		<title><--- Minecraft IN A FAVICON</title>
 		<link rel="shortcut icon" type="image/ico" href="https://www.minecraft.net/etc.clientlibs/minecraft/clientlibs/main/resources/favicon.ico">
+		<style>
+    body {
+        margin: 0;
+        background: #0a0a0c;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+    }
+
+    /* Center preview wrapper */
+    #previewWrapper {
+        width: 55vw;                /* 55% of screen width */
+        aspect-ratio: 16 / 9;       /* keeps shape stable */
+        background: #111;
+        border: 4px solid #181818;
+        border-radius: 18px;
+        box-shadow: 0 0 28px rgba(0,0,0,0.7);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        position: relative;
+        z-index: 10;
+    }
+
+    /* Game canvas fits inside wrapper */
+    #game {
+        width: 100%;
+        height: 100%;
+        image-rendering: pixelated;
+        display: block;
+    }
+</style>
 	</head>
 	<style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500&display=swap');
@@ -93,7 +129,10 @@
 		}
 	</style>
 	<body>
-	<canvas id="overlay" tabindex="0" width="600" height="600" style="position: absolute; top: 0px; left: 0px"></canvas>
+	<div id="previewWrapper">
+    <canvas id="game" width="960" height="540"></canvas>
+</div>
+
 	<input type="text" id="savebox" class="hidden" spellcheck="false" style="position: absolute; top: 10px; left: 10px; z-index: 1;">
 	<input type="text" id="boxcentertop" class="hidden" spellcheck="false">
 	<div id="quota" class="hidden"></div>
